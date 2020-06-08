@@ -5,6 +5,7 @@ library(here)
 library(arrow)
 library(furrr)
 library(vip)
+library(slider)
 
 library(skimr)
 library(pdp)
@@ -17,8 +18,6 @@ doParallel::registerDoParallel()
 setwd(here())
 rosters <- read_parquet("data/rosters/rosters_1999_2019.pdata")
 pbp <- read_parquet("data/pbp_data/pbp_reg_post_1999_2019.pdata")
-#temp <- pbp %>% filter(two_point_attempt == 1) %>% select(desc, play_type, complete_pass, two_point_conv_result, yardline_100, yards_gained)
-#pbp %>% group_by(play_type,two_point_attempt) %>% tally()
 
 # Functions ---------------------------------------------------------------
 get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
@@ -30,7 +29,9 @@ get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
 }
 
 get_rate <- function(x,y){
-  sum(x, na.rm = TRUE) / sum(y, na.rm = TRUE)
+  rate <- sum(x, na.rm = TRUE) / sum(y, na.rm = TRUE)
+  
+  ifelse(is.nan(rate) | is.infinite(rate), 0, rate)
 }
 
 # Rush Data ---------------------------------------------------------------
@@ -67,37 +68,38 @@ rushdf <- pbp %>%
          run_gap_dir = case_when(run_gap_dir %in% c("leftcenter","rightcenter","middleend") | run_location == "unknown" ~ "unknown",
                                  TRUE ~ run_gap_dir)) %>%
   
-  group_by(game_id, posteam) %>%
-  mutate(team_rush_yards = slide_dbl(yards_gained, ~sum(.x, na.rm = TRUE), .before = Inf, .after = 0),
-         team_attempts = slide_dbl(rush_attempt, ~sum(.x, na.rm = TRUE), .before = Inf, .after = 0)) %>%
-  ungroup() %>%
-  
-  arrange(rusher_player_id, game_id) %>%
+  arrange(rusher_player_id, game_id, play_id) %>%
   group_by(rusher_gsis_name, rusher_player_id) %>%
-  mutate(new_game_flag = ifelse(lag(game_id) == game_id, 0, 1),
-         new_game_flag = ifelse(is.na(new_game_flag),1,new_game_flag),
+  mutate(
          
-         new_team_yards = ifelse(new_game_flag == 1, team_rush_yards, team_rush_yards - lag(team_rush_yards)), 
-         new_team_attempts = ifelse(new_game_flag == 1, team_attempts, team_attempts - lag(team_attempts)), 
+         ypc_ToDate = slide2_dbl(yards_gained, rush_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
+
+         attempts_ToDate = slide_dbl(rush_attempt, ~sum(.x, na.rm = TRUE), .before = Inf, .after = -1),
          
-         rush_yards_share_ToDate = slide2_dbl(yards_gained, new_team_yards, ~get_rate(.x,.y), .before = Inf, .after = 0),
-         rush_yards_share_ToDate = case_when(is.nan(rush_yards_share_ToDate) | is.infinite(rush_yards_share_ToDate) | rush_yards_share_ToDate < 0 ~ 0,
-                                             rush_yards_share_ToDate > 1 ~ 1,
-                                             TRUE ~ rush_yards_share_ToDate),
+         TDRate_ToDate = slide2_dbl(rush_touchdown, rush_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1)
          
-         ypc_ToDate = slide2_dbl(yards_gained, new_team_yards, ~get_rate(.x,.y), .before = Inf, .after = 0),
-         
-         attempt_share_ToDate = slide2_dbl(rush_attempt, new_team_attempts, ~get_rate(.x,.y), .before = Inf, .after = 0),
-         attempts_ToDate = row_number()) %>%
+         ) %>%
   ungroup() %>%
   
-  select(season, yards_gained, score, rushFP, rush_touchdown, two_point_converted, yardline_100, qb_scramble, run_gap_dir,
-         run_gap, shotgun, rusher_gsis_pos, ydstogo, two_point_attempt, attempts_ToDate, attempt_share_ToDate, rush_yards_share_ToDate,
-         rusher_gsis_name, alt_game_id, posteam, team_rush_yards, team_attempts) %>%
+  select(rusher_gsis_name, rusher_player_id, season, yards_gained, score, rushFP, rush_touchdown, two_point_converted, yardline_100, qb_scramble, run_gap_dir,
+         run_gap, shotgun, rusher_gsis_pos, ydstogo, two_point_attempt, attempts_ToDate,
+         alt_game_id, posteam, ypc_ToDate, TDRate_ToDate, rusher_age) %>%
   mutate_if(is.character, as.factor) %>%
   na.omit()
 
 rm(pbp)
+
+rushdf %>%
+  #filter(rusher_gsis_name == "Emmitt Smith") %>%
+  ggplot(aes(attempts_ToDate, ypc_ToDate, group = rusher_player_id)) +
+  geom_path(alpha = 0.3) +
+  ylim(0,10)
+
+rushdf %>%
+  #filter(rusher_gsis_name == "Emmitt Smith") %>%
+  ggplot(aes(attempts_ToDate, rush_share_attempt_share_diff, group = rusher_player_id)) +
+  geom_path(alpha = 0.3) +
+  ylim(-1,1)
 
 # Train Test Split Data ---------------------------------------------------
 rushdf_split <- initial_split(rushdf, prop = 4/5, strata = season)
@@ -116,7 +118,7 @@ rushyds_mars <- mars(
 
 rushyds_wf <- workflow() %>%
   add_model(rushyds_mars) %>%
-  add_formula(yards_gained ~  yardline_100 + qb_scramble + run_gap_dir + run_gap + shotgun + rusher_gsis_pos + attempts_ToDate + attempt_share_ToDate + rush_yards_share_ToDate)
+  add_formula(yards_gained ~  yardline_100 + qb_scramble + run_gap_dir + run_gap + shotgun + ypc_ToDate)
 
 # rushyds_grid <- grid_regular(
 #   num_terms(range = c(6,9)),
@@ -145,7 +147,7 @@ rushyds_earthmodel <- rushyds_fit$fit$fit$fit
 rushyds_earthdata <- rushyds_fit$pre$mold$predictors
 
 summary(rushyds_earthmodel)
-#pdp::partial(rushyds_earthmodel, pred.var = c("rush_yards_share_ToDate"), train = rushyds_earthdata) %>% autoplot() + geom_rug()
+#pdp::partial(rushyds_earthmodel, pred.var = c("ypc_ToDate"), train = rushyds_earthdata) %>% autoplot() + xlim(0,10) + ylim(3,6)
 #pdp::partial(rushyds_earthmodel, pred.var = c("rush_yards_share_ToDate","attempt_share_ToDate"), train = rushyds_earthdata) %>% autoplot() + geom_rug()
 
 rushyds_fit %>%
@@ -166,7 +168,7 @@ rushdf_test <- rushdf_test %>%
 folds <- vfold_cv(rushdf_train, 4)
 
 rushtds_mars <- mars(
-  num_terms = tune(),
+  num_terms = 12,#tune(),
   prod_degree = 2,
   prune_method = "exhaustive") %>%
   set_mode("classification") %>%
@@ -174,7 +176,7 @@ rushtds_mars <- mars(
 
 rushtds_wf <- workflow() %>%
   add_model(rushtds_mars) %>%
-  add_formula(as.factor(score) ~  yardline_100 + eRushYD + two_point_attempt + rusher_gsis_pos + run_gap + ydstogo)
+  add_formula(as.factor(score) ~  yardline_100 + run_gap + eRushYD + shotgun+ qb_scramble + ypc_ToDate + run_gap_dir)
 
 # rushtds_grid <- grid_regular(
 #   num_terms(range = c(6,15)),
@@ -190,19 +192,19 @@ rushtds_wf <- workflow() %>%
 #   filter(.metric == "rsq") %>%
 #   ggplot(aes(num_terms, mean))+
 #   geom_point()
-
-rushtds_wf <- rushtds_wf %>%
-  finalize_workflow(tibble(num_terms = 12))
+# 
+# rushtds_wf <- rushtds_wf %>%
+#   finalize_workflow(tibble(num_terms = 12))
 
 rushtds_fit <- fit(rushtds_wf, data = rushdf_train)
 
 pull_workflow_fit(rushtds_fit) %>%
   vip(geom = "point")
 
-#rushtds_earthmodel <- rushtds_fit$fit$fit$fit
-#rushtds_earthdata <- rushtds_fit$pre$mold$predictors
+rushtds_earthmodel <- rushtds_fit$fit$fit$fit
+rushtds_earthdata <- rushtds_fit$pre$mold$predictors
 
-#summary(rushtds_earthmodel)
+summary(rushtds_earthmodel)
 #pdp::partial(rushtds_earthmodel, pred.var = "down", train = rushtds_earthdata) %>% autoplot()
 
 rushtds_fit %>%
@@ -223,7 +225,7 @@ rushdf_test <- rushdf_test %>%
 folds <- vfold_cv(rushdf_train, 4)
 
 rushfps_mars <- mars(
-  num_terms = tune(),
+  num_terms = 10, #tune(),
   prod_degree = 2,
   prune_method = "forward") %>%
   set_mode("regression") %>%
@@ -247,19 +249,19 @@ rushfps_wf <- workflow() %>%
 #   filter(.metric == "rsq") %>%
 #   ggplot(aes(num_terms, mean))+
 #   geom_point()
-
-rushfps_wf <- rushfps_wf %>%
-  finalize_workflow(tibble(num_terms = 5))
+# 
+# rushfps_wf <- rushfps_wf %>%
+#   finalize_workflow(tibble(num_terms = 5))
 
 rushfps_fit <- fit(rushfps_wf, data = rushdf_train)
 
 pull_workflow_fit(rushfps_fit) %>%
   vip(geom = "point")
 
-#rushfps_earthmodel <- rushfps_fit$fit$fit$fit
-# rushfps_earthdata <- rushfps_fit$pre$mold$predictors
-# 
-# summary(rushfps_earthmodel)
+rushfps_earthmodel <- rushfps_fit$fit$fit$fit
+rushfps_earthdata <- rushfps_fit$pre$mold$predictors
+
+summary(rushfps_earthmodel)
 # pdp::partial(rushfps_earthmodel, pred.var = c("eRushTD","two_point_attempt"), train = rushfps_earthdata) %>% autoplot()
 
 rushfps_fit %>%
@@ -279,6 +281,61 @@ rushdf_test <- rushdf_test %>%
   cbind(pred = predict(rushfps_fit, new_data= rushdf_test)) %>%
   rename(erushfps = .pred)
 
+
+# Rushing Plays Remaining ---------------------------------------------------------
+completed_careers <- rushdf %>%
+  filter(rusher_gsis_pos == "RB") %>%
+  group_by(rusher_player_id) %>%
+  summarise(maxseason = max(season)) %>%
+  filter(maxseason < 2019) %>%
+  select(rusher_player_id)
+
+rushdf_completed <- rushdf %>%
+  inner_join(completed_careers, by= c("rusher_player_id"))
+
+rush_eyr <- mars(
+  num_terms = 10,
+  prod_degree = 2,
+  prune_method = "forward") %>%
+  set_mode("regression") %>%
+  set_engine("earth")
+
+rush_eyr <- workflow() %>%
+  add_model(rush_eyr) %>%
+  add_formula(attempts_Remaining ~ attempts_ToDate + attempt_share_ToDate + rush_yards_share_ToDate + ypc_ToDate
+              + yards_per_team_attempt + rush_share_attempt_share_diff + rusher_gsis_pos + season + rusher_age)
+
+rush_eyr_fit <- fit(rush_eyr, data = rushdf_completed)
+
+pull_workflow_fit(rush_eyr_fit) %>%
+  vip(geom = "point")
+
+rushfps_earthmodel <- rush_eyr_fit$fit$fit$fit
+rushfps_earthdata <- rush_eyr_fit$pre$mold$predictors
+
+summary(rushfps_earthmodel)
+pdp::partial(rushfps_earthmodel, pred.var = "attempt_share_ToDate", train = rushfps_earthdata) %>% autoplot()
+
+rushdf_2019 <- rushdf %>%
+  filter(rusher_gsis_pos == "RB") %>%
+  anti_join(completed_careers, by= c("rusher_player_id")) %>%
+  group_by(rusher_player_id) %>%
+  summarise(maxattempts = max(attempts_ToDate))
+
+rushdf_2019_pbp <- rushdf %>%
+  inner_join(rushdf_2019, by = c("rusher_player_id", "attempts_ToDate" = "maxattempts"))
+
+rushdf_2019_fit <- rushdf_2019_pbp %>%
+  cbind(pred = predict(rush_eyr_fit, new_data= rushdf_2019_pbp)) %>%
+  rename(expectedRushesRemaining = .pred) %>%
+  select(rusher_gsis_name, expectedRushesRemaining, rusher_age, attempt_share_ToDate, rusher_gsis_pos, attempts_ToDate, yards_per_team_attempt) %>%
+  filter(attempts_ToDate > 100)
+
+gam1 <- bam(attempts_Remaining ~  s(rusher_age, k =50) + s(attempt_share_ToDate, k=50) + s(attempts_ToDate, k=30) + s(yards_per_team_attempt,k=30) + ti(rusher_age, attempts_ToDate), data = rushdf_completed)
+
+rushdf_2019_pbp$egame <- predict(gam1, newdata = rushdf_2019_pbp)
+temp <- rushdf_2019_pbp%>%
+  dplyr::select(rusher_gsis_name, egame)
 
 # Saving models -----------------------------------------------------------
 
@@ -300,7 +357,7 @@ temp$fit$fit$fit$call <- NULL
 temp$fit$fit$spec$eng_args <- NULL
 temp$fit$fit$spec$method$fit$args <- NULL
 
-weigh(temp)
+weigh(PassFPmod)
 
 predict(temp, new_data= rushdf_train, type = "prob")
 

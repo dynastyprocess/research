@@ -31,7 +31,9 @@ get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
 }
 
 get_rate <- function(x,y){
-  sum(x, na.rm = TRUE) / sum(y, na.rm = TRUE)
+  rate <- sum(x, na.rm = TRUE) / sum(y, na.rm = TRUE)
+  
+  ifelse(is.nan(rate) | is.infinite(rate), 0, rate)
 }
 
 # Pass Data ---------------------------------------------------------------
@@ -83,39 +85,55 @@ passdf <- pbp %>%
          air_is_zero = ifelse(air_yards==0,1,0),
          targetline = yardline_100 - air_yards) %>%
   
-  group_by(game_id, posteam) %>%
-  mutate(team_air_yards = slide_dbl(air_yards, ~sum(.x, na.rm = TRUE), .before = Inf, .after = 0),
-         team_attempts = slide_dbl(pass_attempt, ~sum(.x, na.rm = TRUE), .before = Inf, .after = 0)) %>%
-  ungroup() %>%
-  
-  arrange(passer_player_id, game_id) %>%
+  arrange(passer_player_id, game_id, play_id) %>%
   group_by(passer_gsis_name, passer_player_id) %>%
   mutate(PACR_ToDate = slide2_dbl(yards_gained, abs_air_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
-         PACR_ToDate = ifelse(is.nan(PACR_ToDate) | is.infinite(PACR_ToDate), 0, PACR_ToDate),
-         passes_ToDate = row_number()) %>%
+
+         YPA_ToDate = slide2_dbl(yards_gained, pass_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
+
+         CompRate_ToDate = slide2_dbl(complete_pass, pass_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
+
+         pTDRate_ToDate = slide2_dbl(pass_touchdown, pass_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
+
+         IntRate_ToDate = slide2_dbl(interception, pass_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
+
+         pAvgYAC_ToDate = slide2_dbl(yards_after_catch, pass_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
+
+         pYACRate_ToDate = slide2_dbl(yards_after_catch, yards_gained, ~get_rate(.x,.y), .before = Inf, .after = -1),
+         
+         passes_ToDate = slide_dbl(pass_attempt, ~sum(.x, na.rm = TRUE), .before = Inf, .after = -1),
+         passes_ToDate = ifelse(is.nan(passes_ToDate), 0, passes_ToDate)
+         ) %>%
   ungroup() %>%
   
-  arrange(receiver_player_id, game_id) %>%
+  arrange(receiver_player_id, game_id, play_id) %>%
   group_by(receiver_gsis_name, receiver_player_id) %>%
   mutate(RACR_ToDate = slide2_dbl(yards_gained, abs_air_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
-         RACR_ToDate = ifelse(is.nan(RACR_ToDate) | is.infinite(RACR_ToDate), 0, RACR_ToDate),
+
+         YPT_ToDate = slide2_dbl(yards_gained, pass_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
+
+         CatchRate_ToDate = slide2_dbl(complete_pass, pass_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
+
+         rTDRate_ToDate = slide2_dbl(pass_touchdown, pass_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
+
+         rAvgYAC_ToDate = slide2_dbl(yards_after_catch, pass_attempt, ~get_rate(.x,.y), .before = Inf, .after = -1),
          
-         new_game_flag = ifelse(lag(game_id) == game_id, 0, 1),
-         new_game_flag = ifelse(is.na(new_game_flag),1,new_game_flag),
-         
-         new_team_airyards = ifelse(new_game_flag == 1, team_air_yards, team_air_yards - lag(team_air_yards)), 
-         new_team_attempts = ifelse(new_game_flag == 1, team_attempts, team_attempts - lag(team_attempts)), 
-         
-         air_yards_share_ToDate = slide2_dbl(air_yards, new_team_airyards, ~get_rate(.x,.y), .before = Inf, .after = 0),
-         air_yards_share_ToDate = ifelse(is.nan(air_yards_share_ToDate) | is.infinite(air_yards_share_ToDate),0,air_yards_share_ToDate),
-         
-         target_share_ToDate = slide2_dbl(pass_attempt, new_team_attempts, ~get_rate(.x,.y), .before = Inf, .after = 0),
-         targets_ToDate = row_number()) %>%
+         rYACRate_ToDate = slide2_dbl(yards_after_catch, yards_gained, ~get_rate(.x,.y), .before = Inf, .after = -1),
+      
+         targets_ToDate = slide_dbl(pass_attempt, ~sum(.x, na.rm = TRUE), .before = Inf, .after = -1),
+         targets_ToDate = ifelse(is.na(targets_ToDate), 0, targets_ToDate)
+         ) %>%
   ungroup() %>%
   
   select(game_id, season, week, posteam_type, passer_gsis_pos, passer_age, score, two_point_converted,
          receiver_player_id, passer_player_id, receiver_gsis_name, passer_gsis_name,
-         PACR_ToDate, passes_ToDate, RACR_ToDate, targets_ToDate, air_yards_share_ToDate, target_share_ToDate,
+         
+         PACR_ToDate, passes_ToDate,YPA_ToDate, CompRate_ToDate, 
+         pTDRate_ToDate, IntRate_ToDate, pAvgYAC_ToDate, pYACRate_ToDate,
+         
+         RACR_ToDate, targets_ToDate,
+         YPT_ToDate, CatchRate_ToDate, rTDRate_ToDate, rAvgYAC_ToDate, rYACRate_ToDate, 
+         
          receiver_gsis_pos, receiver_age, two_point_attempt, down, temp,
          passFP, recFP, yards_gained, pass_touchdown, yardline_100, air_yards, qb_hit,
          pass_location, targetline, shotgun, complete_pass, ydstogo, drive, goal_to_go,
@@ -157,7 +175,7 @@ passdf_test <- testing(passdf_split)
 
 # Define Models -----------------------------------------------------------
 rec_mars <- mars(
-  num_terms = 20, #tune(),
+  num_terms = 17, #tune(),
   prod_degree = 2,
   prune_method = "exhaustive") %>%
   set_mode("classification") %>%
@@ -165,9 +183,7 @@ rec_mars <- mars(
 
 rec_wf <- workflow() %>%
   add_model(rec_mars) %>%
-  add_formula(as.factor(complete_pass) ~  air_yards + targetline + air_is_zero + pass_location + down + qb_hit
-                                    + PACR_ToDate + passes_ToDate + RACR_ToDate + targets_ToDate +
-                                    + air_yards_share_ToDate + target_share_ToDate)
+  add_formula(as.factor(complete_pass) ~  air_yards + targetline + air_is_zero + pass_location + down + qb_hit + CompRate_ToDate)
 
 # mars_grid <- grid_regular(
 #   num_terms(range = c(12,16)),
@@ -196,8 +212,8 @@ earthmodel <- rec_fit$fit$fit$fit
 earthdata <- rec_fit$pre$mold$predictors
 summary(earthmodel)
 
-pdp::partial(earthmodel, pred.var = "passes_ToDate", train = earthdata) %>% autoplot() + xlim(0.5,1)
-temp <- pdp::partial(earthmodel, pred.var = c("passes_ToDate","air_yards"), train = earthdata) %>% autoplot() + ylim(-5,30)
+pdp::partial(earthmodel, pred.var = "CompRate_ToDate", train = earthdata) %>% autoplot() + xlim(0.5,1)
+temp <- pdp::partial(earthmodel, pred.var = c("CompRate_ToDate","qb_hit"), train = earthdata) %>% autoplot() + ylim(-5,30)
 
 rec_fit %>%
   predict(new_data= passdf_test, type = "prob") %>%
@@ -212,22 +228,26 @@ cpoe_func <- function(x,y){
 passdf_train <- passdf_train %>%
   cbind(pred = predict(rec_fit, new_data= passdf_train, type = "prob")) %>%
   rename(eRec = pred..pred_1, nerec = pred..pred_0) %>%
-  arrange(passer_player_id, game_id) %>%
+  arrange(passer_player_id, game_id, passes_ToDate) %>%
   group_by(passer_gsis_name, passer_player_id) %>%
   mutate(QBCPOE_ToDate = slide2_dbl(complete_pass, eRec, ~cpoe_func(.x,.y), .before = Inf, .after = -1),
-         QBCPOE_ToDate = ifelse(is.nan(QBCPOE_ToDate), 0, QBCPOE_ToDate),
-         passes_ToDate = row_number()) %>%
+         QBCPOE_ToDate = ifelse(is.nan(QBCPOE_ToDate), 0, QBCPOE_ToDate)) %>%
   ungroup() %>%
-  arrange(receiver_player_id, game_id) %>%
+  arrange(receiver_player_id, game_id, targets_ToDate) %>%
   group_by(receiver_gsis_name, receiver_player_id) %>% 
   mutate(RecCPOE_ToDate = slide2_dbl(complete_pass, eRec, ~cpoe_func(.x,.y), .before = Inf, .after = -1),
-         RecCPOE_ToDate = ifelse(is.nan(RecCPOE_ToDate), 0, RecCPOE_ToDate),
-         targets_ToDate = row_number()) %>%
+         RecCPOE_ToDate = ifelse(is.nan(RecCPOE_ToDate), 0, RecCPOE_ToDate)) %>%
   ungroup()
 
 passdf%>%
-  filter(passer_gsis_name == "Drew Brees" | passer_gsis_name == "Tom Brady" | passer_gsis_name == "Peyton Manning", PACR_ToDate < 2) %>%
-  ggplot(aes(passes_ToDate,PACR_ToDate, color = passer_gsis_name)) +
+  filter(passer_gsis_name == "Kyler Murray" | passer_gsis_name == "Gardner Minshew" | passer_gsis_name == "Daniel Jones", passes_ToDate > 5) %>%
+  ggplot(aes(passes_ToDate,CompRate_ToDate, color = passer_gsis_name)) +
+  geom_line()
+
+
+passdf%>%
+  filter(passer_gsis_name == "Eli Manning" | passer_gsis_name == "Ben Roethlisberger" | passer_gsis_name == "Philip Rivers", passes_ToDate > 5) %>%
+  ggplot(aes(passes_ToDate,CompRate_ToDate, color = passer_gsis_name)) +
   geom_line()
 
 passdf_train %>%
@@ -236,8 +256,8 @@ passdf_train %>%
   geom_line()
 
 passdf %>%
-  filter(receiver_gsis_name == "Michael Gallup" | receiver_gsis_name == "Calvin Ridley" | receiver_gsis_name == "Curtis Samuel", targets_ToDate >= 10) %>%
-  ggplot(aes(targets_ToDate,air_yards_share_ToDate, color = receiver_gsis_name)) +
+  filter(receiver_gsis_name == "Mike Gesicki" | receiver_gsis_name == "Michael Thomas" | receiver_gsis_name == "Dede Westbrook", targets_ToDate >= 10) %>%
+  ggplot(aes(targets_ToDate,rAvgYAC_ToDate, color = receiver_gsis_name)) +
   geom_line()
 
 passdf_test <- passdf_test %>%
@@ -256,10 +276,7 @@ recyds_mars <- mars(
 
 recyds_wf <- workflow() %>%
   add_model(recyds_mars) %>%
-  add_formula(yards_gained ~  air_yards + targetline + pass_location + eRec + half_seconds_remaining + wp + qb_hit
-                              + PACR_ToDate + passes_ToDate + RACR_ToDate + targets_ToDate
-                              + air_yards_share_ToDate + target_share_ToDate
-                              + QBCPOE_ToDate + RecCPOE_ToDate)
+  add_formula(yards_gained ~  air_yards + eRec + targetline + half_seconds_remaining + rAvgYAC_ToDate + wp)
 
 # recyds_grid <- grid_regular(
 #   num_terms(range = c(5,15)),
@@ -284,14 +301,14 @@ recyds_fit <- fit(recyds_wf, data = passdf_train)
 pull_workflow_fit(recyds_fit) %>%
   vip(geom = "point")
 
-#recyds_earthmodel <- recyds_fit$fit$fit$fit
-#recyds_earthdata <- recyds_fit$pre$mold$predictors
+recyds_earthmodel <- recyds_fit$fit$fit$fit
+recyds_earthdata <- recyds_fit$pre$mold$predictors
 
-#summary(recyds_earthmodel)
-#pdp::partial(recyds_earthmodel, pred.var = "RACR_ToDate", train = recyds_earthdata) %>% autoplot() + xlim(-0.5,2)
-temp <- pdp::partial(recyds_earthmodel, pred.var = c("RACR_ToDate","air_yards"), train = recyds_earthdata) %>% autoplot()
+summary(recyds_earthmodel)
+#pdp::partial(recyds_earthmodel, pred.var = "rAvgYAC_ToDate", train = recyds_earthdata) %>% autoplot() + xlim(0,10)
+temp <- pdp::partial(recyds_earthmodel, pred.var = c("rAvgYAC_ToDate","air_yards"), train = recyds_earthdata) %>% autoplot()
 temp %>% ggplot(aes(RACR_ToDate,air_yards, color = yhat)) + geom_hex(bins = 4) + xlim(0,4) + ylim(-5,30)
-temp %>% autoplot() + xlim(0,4) + ylim(-5,30)
+temp + xlim(0,10) + ylim(-5,30)
 
 
 recyds_fit %>%
@@ -320,11 +337,7 @@ rectds_mars <- mars(
 
 rectds_wf <- workflow() %>%
   add_model(rectds_mars) %>%
-  add_formula(as.factor(score) ~  targetline + yardline_100 + air_yards + eRecYDs +
-                qb_hit
-              + PACR_ToDate + passes_ToDate + RACR_ToDate + targets_ToDate
-              + air_yards_share_ToDate + target_share_ToDate
-              + QBCPOE_ToDate + RecCPOE_ToDate)
+  add_formula(as.factor(score) ~  targetline + yardline_100 + air_yards + eRecYDs + eRec)
 
 # rectds_grid <- grid_regular(
 #   num_terms(range = c(5,15)),
@@ -349,10 +362,10 @@ rectds_fit <- fit(rectds_wf, data = passdf_train)
 pull_workflow_fit(rectds_fit) %>%
   vip(geom = "point")
 
-#rectds_earthmodel <- rectds_fit$fit$fit$fit
-#rectds_earthdata <- rectds_fit$pre$mold$predictors
+rectds_earthmodel <- rectds_fit$fit$fit$fit
+rectds_earthdata <- rectds_fit$pre$mold$predictors
 
-#summary(rectds_earthmodel)
+summary(rectds_earthmodel)
 #pdp::partial(rectds_earthmodel, pred.var = c("QBCPOE_ToDate"), train = rectds_earthdata) %>% autoplot()
 #pdp::partial(rectds_earthmodel, pred.var = c("QBCPOE_ToDate","targetline"), train = rectds_earthdata) %>% autoplot()
 
@@ -382,10 +395,7 @@ recfps_mars <- mars(
 
 recfps_wf <- workflow() %>%
   add_model(recfps_mars) %>%
-  add_formula(recFP ~ eRec + eRecYDs + eRecTDs + two_point_attempt + qb_hit
-              + PACR_ToDate + passes_ToDate + RACR_ToDate + targets_ToDate
-              + air_yards_share_ToDate + target_share_ToDate
-              + QBCPOE_ToDate + RecCPOE_ToDate)
+  add_formula(recFP ~ eRec + eRecYDs + eRecTDs + two_point_attempt)
 
 # recfps_grid <- grid_regular(
 #   num_terms(range = c(5,15)),
@@ -446,7 +456,7 @@ summary(recfps_earthmodel)
 folds <- vfold_cv(passdf_train, 4)
 
 passfps_mars <- mars(
-  num_terms = tune(),
+  num_terms = 10, #tune(),
   prod_degree = 2,
   prune_method = "forward") %>%
   set_mode("regression") %>%
@@ -470,19 +480,18 @@ passfps_wf <- workflow() %>%
 #   filter(.metric == "rsq") %>%
 #   ggplot(aes(num_terms, mean))+
 #   geom_point()
-
-passfps_wf <- passfps_wf %>%
-  finalize_workflow(tibble(num_terms = 7))
+# passfps_wf <- passfps_wf %>%
+#   finalize_workflow(tibble(num_terms = 7))
 
 passfps_fit <- fit(passfps_wf, data = passdf_train)
 
 pull_workflow_fit(passfps_fit) %>%
   vip(geom = "point")
 
-#passfps_earthmodel <- passfps_fit$fit$fit$fit
-#passfps_earthdata <- passfps_fit$pre$mold$predictors
+passfps_earthmodel <- passfps_fit$fit$fit$fit
+passfps_earthdata <- passfps_fit$pre$mold$predictors
 
-#summary(passfps_earthmodel)
+summary(passfps_earthmodel)
 #pdp::partial(passfps_earthmodel, pred.var = c("eRecTDs"), train = passfps_earthdata) %>% autoplot()
 
 passfps_fit %>%
