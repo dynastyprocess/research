@@ -70,7 +70,7 @@ rushdf <- pbp %>%
          run_gap_dir = paste0(run_location,run_gap),
          run_gap_dir = case_when(run_gap_dir %in% c("leftcenter","rightcenter","middleend") | run_location == "unknown" ~ "unknown",
                                  TRUE ~ run_gap_dir),
-         season = as.factor(season),
+         #season = as.factor(season),
          game_id = as.factor(game_id)) %>%
 
   arrange(rusher_player_id, game_id) %>%
@@ -132,7 +132,7 @@ passdf <- pbp %>%
          air_is_zero = ifelse(air_yards==0,1,0),
          abs_air_yards = abs(air_yards),
          targetline = yardline_100 - air_yards,
-         season = as.factor(season),
+         #season = as.factor(season),
          game_id = as.factor(game_id)) %>%
 
   arrange(passer_player_id, game_id, play_id) %>%
@@ -159,33 +159,34 @@ passdf <- pbp %>%
   select(season, week, posteam, game_id, receiver_player_id, receiver_gsis_name, receiver_gsis_pos, passer_player_id, passer_gsis_name, passer_gsis_pos,
          passFP, recFP, yards_gained, pass_touchdown, air_yards, complete_pass, eRec, eRecYD = eRecYDs, eRecTD = eRecTDs, eRecFP, ePassFP)
 
-#rm(pbp)
+rm(pbp)
 
 # Combine Rushing and Passing ---------------------------------------------
 rushGame <- rushdf %>%
   group_by(season, posteam, week, game_id, rusher_player_id, rusher_gsis_name, rusher_gsis_pos) %>%
-  summarise(across(is.numeric, sum, na.rm = TRUE),
-            Carries = n()) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE),
+            rush_att = n()) %>%
   ungroup() %>%
   select(season, posteam, week, game_id, rusher_player_id, rusher_gsis_name, rusher_gsis_pos,
-         rushFP, rushYD = yards_gained, Carries, rushTD = rush_touchdown, eRushYD, eRushTD, eRushFP)
+         rush_fp = rushFP, rush_yd = yards_gained, rush_att, rush_td = rush_touchdown, rush_yd_x = eRushYD, rush_td_x = eRushTD, rush_fp_x = eRushFP)
 
 recGame <- passdf %>%
   group_by(season, posteam, week, game_id, receiver_player_id, receiver_gsis_name, receiver_gsis_pos) %>%
-  summarise(across(is.numeric, sum, na.rm = TRUE),
-            Targets = n()) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE),
+            rec_tar = n()) %>%
   ungroup() %>%
   select(season, posteam, week, game_id, receiver_player_id, receiver_gsis_name, receiver_gsis_pos,
-         recFP, recYD = yards_gained, recTD = pass_touchdown, AirYards = air_yards, Targets, Rec = complete_pass, eRec, eRecYD, eRecFP)
+         rec_fp = recFP, rec_yd = yards_gained, rec_td = pass_touchdown, rec_ay = air_yards, rec_tar, rec_comp = complete_pass, 
+         rec_comp_x = eRec, rec_yd_x = eRecYD, rec_fp_x = eRecFP, rec_td_x = eRecTD)
 
 passGame <- passdf %>%
   group_by(season, posteam, week, game_id, passer_player_id, passer_gsis_name, passer_gsis_pos) %>%
-  summarise(across(is.numeric, sum, na.rm = TRUE),
-            Attempts = n()) %>%
+  summarise(across(where(is.numeric), sum, na.rm = TRUE),
+            pass_att = n()) %>%
   ungroup() %>%
   select(season, posteam, week, game_id, passer_player_id, passer_gsis_name, passer_gsis_pos,
-         passFP, passYD = yards_gained, passTD = pass_touchdown, Attempts,
-         Completions = complete_pass, ePassYD = eRecYD, ePassTD = eRecTD, ePassFP)
+         pass_att, pass_fp = passFP, pass_yd = yards_gained, pass_td = pass_touchdown, pass_comp = complete_pass, pass_ay = air_yards,
+         pass_comp_x = eRec, pass_yd_x = eRecYD, pass_td_x = eRecTD, pass_fp_x = ePassFP)
 
 all_games <- 
   full_join(rushGame, recGame,  by=c("game_id", "season", "rusher_player_id" = "receiver_player_id", "week", "posteam")) %>%
@@ -197,309 +198,108 @@ all_games <-
          gsis_name = ifelse(is.na(combo_name), passer_gsis_name, combo_name),
          gsis_pos = ifelse(is.na(combo_pos), passer_gsis_pos, combo_pos)) %>%
   rowwise() %>%
-  mutate(TotalFP = sum(passFP, rushFP, recFP, na.rm = TRUE),
-         eTotalFP = sum(ePassFP, eRushFP, eRecFP, na.rm = TRUE),
-         TotalFPDiff = TotalFP - eTotalFP) %>%
+  mutate(total_fp = sum(rush_fp, rec_fp, na.rm = TRUE),
+         total_fp_x = sum(rush_fp_x, rec_fp_x, na.rm = TRUE),
+         total_fp_diff = total_fp - total_fp_x,
+
+         total_yd = sum(pass_yd, rush_yd, rec_yd, na.rm = TRUE),
+         total_yd_x = sum(pass_yd_x, rush_yd_x, rec_yd_x, na.rm = TRUE),
+         total_yd_diff = total_yd - total_yd_x,
+         
+         total_td = sum(pass_td, rush_td, rec_td, na.rm = TRUE),
+         total_td_x = sum(pass_td_x, rush_td_x, rec_td_x, na.rm = TRUE),
+         total_td_diff = total_td - total_td_x,
+         
+         rush_fp_diff = rush_fp - rush_fp_x,
+         rush_yd_diff = rush_yd - rush_yd_x,
+         rush_td_diff = rush_td - rush_td_x,
+         
+         rec_fp_diff = rec_fp - rec_fp_x,
+         rec_yd_diff = rec_yd - rec_yd_x,
+         rec_td_diff = rec_td - rec_td_x,
+         rec_comp_diff = rec_comp - rec_comp_x,
+
+         pass_fp_diff = pass_fp - pass_fp_x,
+         pass_yd_diff = pass_yd - pass_yd_x,
+         pass_td_diff = pass_td - pass_td_x,
+         pass_comp_diff = pass_comp - pass_comp_x
+         
+         #season_num = as.numeric(as.character(season))
+                                 
+         ) %>%
   ungroup() %>%
-  select(season, posteam, week, game_id, player_id, gsis_name, gsis_pos, is.numeric)
+  group_by(game_id, posteam) %>%
+  mutate(
+    rush_fp_team = sum(rush_fp, na.rm = TRUE),
+    rush_yd_team = sum(rush_yd, na.rm = TRUE),
+    rush_td_team = sum(rush_td, na.rm = TRUE),
+    rush_fp_team_x = sum(rush_fp_x, na.rm = TRUE),
+    rush_yd_team_x = sum(rush_yd_x, na.rm = TRUE),
+    rush_td_team_x = sum(rush_td_x, na.rm = TRUE),
+    rush_fp_team_diff = sum(rush_fp_diff, na.rm = TRUE),
+    rush_yd_team_diff = sum(rush_yd_diff, na.rm = TRUE),
+    rush_td_team_diff = sum(rush_td_diff, na.rm = TRUE),  
+    
+    rec_fp_team = sum(rec_fp, na.rm = TRUE),
+    rec_yd_team = sum(rec_yd, na.rm = TRUE),
+    rec_td_team = sum(rec_td, na.rm = TRUE),
+    rec_fp_team_x = sum(rec_fp_x, na.rm = TRUE),
+    rec_yd_team_x = sum(rec_yd_x, na.rm = TRUE),
+    rec_td_team_x = sum(rec_td_x, na.rm = TRUE),
+    rec_fp_team_diff = sum(rec_fp_diff, na.rm = TRUE),
+    rec_yd_team_diff = sum(rec_yd_diff, na.rm = TRUE),
+    rec_td_team_diff = sum(rec_td_diff, na.rm = TRUE),
+    
+    pass_fp_team = sum(pass_fp, na.rm = TRUE),
+    pass_yd_team = sum(pass_yd, na.rm = TRUE),
+    pass_td_team = sum(pass_td, na.rm = TRUE),
+    pass_ay_team = sum(pass_ay, na.rm = TRUE),
+    pass_att_team = sum(pass_att, na.rm = TRUE),
+    pass_comp_team = sum(pass_att, na.rm = TRUE),
+    pass_fp_team_x = sum(pass_fp_x, na.rm = TRUE),
+    pass_yd_team_x = sum(pass_yd_x, na.rm = TRUE),
+    pass_td_team_x = sum(pass_td_x, na.rm = TRUE),
+    pass_fp_team_diff = sum(pass_fp_diff, na.rm = TRUE),
+    pass_yd_team_diff = sum(pass_yd_diff, na.rm = TRUE),
+    pass_td_team_diff = sum(pass_td_diff, na.rm = TRUE),
+    
+    total_fp_team = rush_fp_team + rec_fp_team,
+    total_yd_team = rush_yd_team + rec_yd_team,
+    total_td_team = rush_td_team + rec_td_team,
+    total_fp_team_x = rush_fp_team_x + rec_fp_team_x,
+    total_yd_team_x = rush_yd_team_x + rec_yd_team_x,
+    total_td_team_x = rush_td_team_x + rec_td_team_x,
+    total_fp_team_diff = rush_fp_team_diff + rec_fp_team_diff,
+    total_yd_team_diff = rush_yd_team_diff + rec_yd_team_diff,
+    total_td_team_diff = rush_td_team_diff + rec_td_team_diff
+  ) %>%
+  ungroup() %>%
+  mutate_if(is.numeric, ~replace(., is.na(.), 0)) %>%
+  mutate(team = case_when(posteam == "ARZ" ~ "ARI",
+                          posteam == "BLT" ~ "BAL",
+                          posteam == "CLV" ~ "CLE",
+                          posteam == "HST" ~ "HOU",
+                          posteam == "JAC" ~ "JAX",
+                          posteam == "LA" ~ "LAR",
+                          posteam == "STL" ~ "LAR",
+                          posteam == "SAN" ~ "LAC",
+                          posteam == "SD" ~ "LAC",
+                          posteam == "SL" ~ "LAR",
+                          
+                          TRUE ~ posteam),
+         week_season = paste0("Week ", week, ', ', season)) %>% 
+  group_by(season, week, week_season) %>%
+  #arrange(season, week) %>%
+  mutate(week_season_num = cur_group_id()) %>%
+  ungroup() %>%
+  select(season, week, week_season, week_season_num, team, gsis_game_id = game_id, gsis_id = player_id, gsis_name, gsis_pos, where(is.numeric))
+
+# skim(all_games)
+# 
+# all_games %>% group_by(week_season) %>% tally()
+# 
+# temp <- pbp %>% group_by(season, posteam) %>% tally(game_id)
+
 
 write_parquet(all_games, "data/fit_data/ep_1999_2019.pdata")
 
-# Compare to old EP -------------------------------------------------------
-old_df2019 <- dfnewmerged %>%
-  filter(week <= 17) %>%
-  group_by(rusher_player_id) %>%
-  summarise(ep_old = sum(eFP, na.rm=TRUE),
-            rushep_old = sum(eRushFP, na.rm = TRUE),
-            recep_odl = sum(eRecFP, na.rm = TRUE),
-            fp_old = sum(FP, na.rm = TRUE),
-            rushfp_old = sum(RushFP, na.rm = TRUE),
-            recfp_old = sum(RecFP, na.rm = TRUE)) %>%
-  ungroup()
-
-new_df2019 <- all_games %>%
-  filter(season == "2019", week <= 17) %>%
-  group_by(gsis_name, player_id) %>%
-  summarise(ep_new = sum(eTotalFP, na.rm = TRUE),
-            rushep_new = sum(eRushFP, na.rm = TRUE),
-            recep_new = sum(eRecFP, na.rm = TRUE),
-            fp_new = sum(TotalFP, na.rm = TRUE),
-            rushfp_new = sum(rushFP, na.rm = TRUE),
-            recfp_new = sum(recFP, na.rm = TRUE)) %>%
-  ungroup()
-
-merged_df <- new_df2019 %>%
-  left_join(old_df2019, by = c("player_id" = "rusher_player_id")) %>%
-  mutate(rushdif = rushep_new - rushep_old,
-         recdif = recep_new - recep_odl)
-
-merged_df %>%
-  rsq(rushfp_new, rushep_new)
-
-merged_df %>%
-  rsq(rushfp_new, rushep_old)
-
-
-merged_df %>%
-  rsq(recfp_new, recep_new)
-
-merged_df %>%
-  rsq(recfp_new, recep_odl)
-
-merged_example <- all_games %>%
-  filter(season == "2019", gsis_name == "Michael Thomas") %>%
-  inner_join(dfnewmerged, by = c("player_id" = "rusher_player_id", "week")) %>%
-  select(week, eRecFP.x, eRecFP.y)
-
-
-# Rolling Averages ---------------------------------------------
-games_slide <- all_games %>%
-  filter(substr(game_id,1,4) >= 2006) %>%
-  #filter(gsis_name == "Christian Kirk") %>%
-  mutate(game_id = as.factor(game_id)) %>%
-  arrange(player_id, game_id) %>%
-  group_by(player_id, gsis_name, gsis_pos) %>%
-  mutate_all(~replace(., is.na(.), 0)) %>% 
-  mutate(#AvgToDate = across(is.numeric, ~slide_dbl(.x, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1)),
-         #AvgPrev2 = across(is.numeric, ~slide_dbl(.x, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1, .complete = TRUE)),
-    
-         #Expected Points
-         AvgEP_ToDate = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1),
-         AvgEP_Prev2 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1),
-         AvgEP_Prev4 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 4, .after = -1),
-         AvgEP_Prev6 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 6, .after = -1),
-         AvgEP_Prev8 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 8, .after = -1),
-         AvgEP_Prev10 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 10, .after = -1),
-         AvgEP_Prev12 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 12, .after = -1),
-         AvgEP_Prev14 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 14, .after = -1),
-         AvgEP_Prev16 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 16, .after = -1),
-         AvgEP_Prev18 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 18, .after = -1),
-         AvgEP_Prev20 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 20, .after = -1),
-         AvgEP_Prev22 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 22, .after = -1),
-         AvgEP_Prev24 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 24, .after = -1),
-         AvgEP_Prev26 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 26, .after = -1),
-         AvgEP_Prev28 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 28, .after = -1),
-         AvgEP_Prev30 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 30, .after = -1),
-         AvgEP_Prev32 = slide_dbl(eTotalFP, ~mean(.x, na.rm =TRUE), .before = 32, .after = -1),
-         
-         AvgRushEP_ToDate = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1),
-         AvgRushEP_Prev2 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1),
-         AvgRushEP_Prev4 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 4, .after = -1),
-         AvgRushEP_Prev6 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 6, .after = -1),
-         AvgRushEP_Prev8 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 8, .after = -1),
-         AvgRushEP_Prev10 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 10, .after = -1),
-         AvgRushEP_Prev12 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 12, .after = -1),
-         AvgRushEP_Prev14 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 14, .after = -1),
-         AvgRushEP_Prev16 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 16, .after = -1),
-         AvgRushEP_Prev18 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 18, .after = -1),
-         AvgRushEP_Prev20 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 20, .after = -1),
-         AvgRushEP_Prev22 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 22, .after = -1),
-         AvgRushEP_Prev24 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 24, .after = -1),
-         AvgRushEP_Prev26 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 26, .after = -1),
-         AvgRushEP_Prev28 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 28, .after = -1),
-         AvgRushEP_Prev30 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 30, .after = -1),
-         AvgRushEP_Prev32 = slide_dbl(eRushFP, ~mean(.x, na.rm =TRUE), .before = 32, .after = -1),
-         
-         AvgRecEP_ToDate = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1),
-         AvgRecEP_Prev2 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1),
-         AvgRecEP_Prev4 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 4, .after = -1),
-         AvgRecEP_Prev6 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 6, .after = -1),
-         AvgRecEP_Prev8 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 8, .after = -1),
-         AvgRecEP_Prev10 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 10, .after = -1),
-         AvgRecEP_Prev12 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 12, .after = -1),
-         AvgRecEP_Prev14 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 14, .after = -1),
-         AvgRecEP_Prev16 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 16, .after = -1),
-         AvgRecEP_Prev18 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 18, .after = -1),
-         AvgRecEP_Prev20 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 20, .after = -1),
-         AvgRecEP_Prev22 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 22, .after = -1),
-         AvgRecEP_Prev24 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 24, .after = -1),
-         AvgRecEP_Prev26 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 26, .after = -1),
-         AvgRecEP_Prev28 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 28, .after = -1),
-         AvgRecEP_Prev30 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 30, .after = -1),
-         AvgRecEP_Prev32 = slide_dbl(eRecFP, ~mean(.x, na.rm =TRUE), .before = 32, .after = -1),
-         
-         AvgPassEP_ToDate = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1),
-         AvgPassEP_Prev2 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1),
-         AvgPassEP_Prev4 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 4, .after = -1),
-         AvgPassEP_Prev6 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 6, .after = -1),
-         AvgPassEP_Prev8 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 8, .after = -1),
-         AvgPassEP_Prev10 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 10, .after = -1),
-         AvgPassEP_Prev12 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 12, .after = -1),
-         AvgPassEP_Prev14 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 14, .after = -1),
-         AvgPassEP_Prev16 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 16, .after = -1),
-         AvgPassEP_Prev18 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 18, .after = -1),
-         AvgPassEP_Prev20 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 20, .after = -1),
-         AvgPassEP_Prev22 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 22, .after = -1),
-         AvgPassEP_Prev24 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 24, .after = -1),
-         AvgPassEP_Prev26 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 26, .after = -1),
-         AvgPassEP_Prev28 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 28, .after = -1),
-         AvgPassEP_Prev30 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 30, .after = -1),
-         AvgPassEP_Prev32 = slide_dbl(ePassFP, ~mean(.x, na.rm =TRUE), .before = 32, .after = -1),
-         
-         #AirYards
-         AvgAY_ToDate = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1),
-         AvgAY_Prev2 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1),
-         AvgAY_Prev4 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 4, .after = -1),
-         AvgAY_Prev6 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 6, .after = -1),
-         AvgAY_Prev8 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 8, .after = -1),
-         AvgAY_Prev10 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 10, .after = -1),
-         AvgAY_Prev12 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 12, .after = -1),
-         AvgAY_Prev14 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 14, .after = -1),
-         AvgAY_Prev16 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 16, .after = -1),
-         AvgAY_Prev18 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 18, .after = -1),
-         AvgAY_Prev20 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 20, .after = -1),
-         AvgAY_Prev22 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 22, .after = -1),
-         AvgAY_Prev24 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 24, .after = -1),
-         AvgAY_Prev26 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 26, .after = -1),
-         AvgAY_Prev28 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 28, .after = -1),
-         AvgAY_Prev30 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 30, .after = -1),
-         AvgAY_Prev32 = slide_dbl(AirYards, ~mean(.x, na.rm =TRUE), .before = 32, .after = -1),
-         
-         #Fantasy Points
-         AvgFP_ToDate = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1),
-         AvgFP_Prev2 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1),
-         AvgFP_Prev4 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 4, .after = -1),
-         AvgFP_Prev6 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 6, .after = -1),
-         AvgFP_Prev8 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 8, .after = -1),
-         AvgFP_Prev10 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 10, .after = -1),
-         AvgFP_Prev12 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 12, .after = -1),
-         AvgFP_Prev14 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 14, .after = -1),
-         AvgFP_Prev16 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 16, .after = -1),
-         AvgFP_Prev18 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 18, .after = -1),
-         AvgFP_Prev20 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 20, .after = -1),
-         AvgFP_Prev22 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 22, .after = -1),
-         AvgFP_Prev24 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 24, .after = -1),
-         AvgFP_Prev26 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 26, .after = -1),
-         AvgFP_Prev28 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 28, .after = -1),
-         AvgFP_Prev30 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 30, .after = -1),
-         AvgFP_Prev32 = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = 32, .after = -1),
-         
-         AvgRecFP_ToDate = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1),
-         AvgRecFP_Prev2 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1),
-         AvgRecFP_Prev4 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 4, .after = -1),
-         AvgRecFP_Prev6 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 6, .after = -1),
-         AvgRecFP_Prev8 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 8, .after = -1),
-         AvgRecFP_Prev10 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 10, .after = -1),
-         AvgRecFP_Prev12 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 12, .after = -1),
-         AvgRecFP_Prev14 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 14, .after = -1),
-         AvgRecFP_Prev16 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 16, .after = -1),
-         AvgRecFP_Prev18 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 18, .after = -1),
-         AvgRecFP_Prev20 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 20, .after = -1),
-         AvgRecFP_Prev22 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 22, .after = -1),
-         AvgRecFP_Prev24 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 24, .after = -1),
-         AvgRecFP_Prev26 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 26, .after = -1),
-         AvgRecFP_Prev28 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 28, .after = -1),
-         AvgRecFP_Prev30 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 30, .after = -1),
-         AvgRecFP_Prev32 = slide_dbl(recFP, ~mean(.x, na.rm =TRUE), .before = 32, .after = -1),
-         
-         AvgRushFP_ToDate = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1),
-         AvgRushFP_Prev2 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1),
-         AvgRushFP_Prev4 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 4, .after = -1),
-         AvgRushFP_Prev6 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 6, .after = -1),
-         AvgRushFP_Prev8 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 8, .after = -1),
-         AvgRushFP_Prev10 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 10, .after = -1),
-         AvgRushFP_Prev12 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 12, .after = -1),
-         AvgRushFP_Prev14 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 14, .after = -1),
-         AvgRushFP_Prev16 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 16, .after = -1),
-         AvgRushFP_Prev18 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 18, .after = -1),
-         AvgRushFP_Prev20 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 20, .after = -1),
-         AvgRushFP_Prev22 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 22, .after = -1),
-         AvgRushFP_Prev24 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 24, .after = -1),
-         AvgRushFP_Prev26 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 26, .after = -1),
-         AvgRushFP_Prev28 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 28, .after = -1),
-         AvgRushFP_Prev30 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 30, .after = -1),
-         AvgRushFP_Prev32 = slide_dbl(rushFP, ~mean(.x, na.rm =TRUE), .before = 32, .after = -1),
-         
-         AvgPassFP_ToDate = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = Inf, .after = -1),
-         AvgPassFP_Prev2 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 2, .after = -1),
-         AvgPassFP_Prev4 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 4, .after = -1),
-         AvgPassFP_Prev6 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 6, .after = -1),
-         AvgPassFP_Prev8 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 8, .after = -1),
-         AvgPassFP_Prev10 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 10, .after = -1),
-         AvgPassFP_Prev12 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 12, .after = -1),
-         AvgPassFP_Prev14 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 14, .after = -1),
-         AvgPassFP_Prev16 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 16, .after = -1),
-         AvgPassFP_Prev18 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 18, .after = -1),
-         AvgPassFP_Prev20 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 20, .after = -1),
-         AvgPassFP_Prev22 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 22, .after = -1),
-         AvgPassFP_Prev24 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 24, .after = -1),
-         AvgPassFP_Prev26 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 26, .after = -1),
-         AvgPassFP_Prev28 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 28, .after = -1),
-         AvgPassFP_Prev30 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 30, .after = -1),
-         AvgPassFP_Prev32 = slide_dbl(passFP, ~mean(.x, na.rm =TRUE), .before = 32, .after = -1),
-         
-         ROCAvgFP = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = -1, .after = Inf),
-         Next4_AvgFP = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = -1, .after = 4),
-         Next8_AvgFP = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = -1, .after = 8),
-         Next12_AvgFP = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = -1, .after = 12),
-         Next16_AvgFP = slide_dbl(TotalFP, ~mean(.x, na.rm =TRUE), .before = -1, .after = 16),
-         
-  ) %>%
-  ungroup()
-
-
-
-# Mars Model ---------------------------------------------
-fp_model <- function(df){
-  earth(Next16_AvgFP ~ ., data = df, degree = 2)
-}
-
-
-slide_reg <- games_slide %>%
-  filter(!is.na(ROCAvgFP)) %>%
-  select(Next16_AvgFP, gsis_pos, starts_with("Avg")) %>%
-  mutate_all(~replace(., is.na(.), 0)) %>% 
-  mutate(gsis_pos = as.factor(gsis_pos)) %>%
-  na.omit()
-
-sliding_split <- initial_split(slide_reg, prop = 4/5)
-
-# formulas <- c("RocAvgFP ~ ., data = df",
-#               #"Next4_AvgFP ~ ., data = df",
-#               "Next8_AvgFP ~ ., data = df",
-#               #"Next12_AvgFP ~ ., data = df",
-#               "Next16_AvgFP ~ ., data = df")
-
-slidedf_train <- training(sliding_split) %>%
-  group_by(gsis_pos) %>%
-  nest() %>%
-  mutate(model = future_map(data, fp_model),
-         summs = future_map(model, summary),
-         vips = future_map(model, vip))
-
-
-slidedf_train$gsis_pos[[3]]
-slidedf_train$summs[[3]]
-
-slidedf_train$vips[[3]]
-
-pdp::partial(slidedf_train$model[[3]], pred.var = "AvgFP_Prev28", train = slidedf_train$data[[3]]) %>% autoplot()
-pdp::partial(slidedf_train$model[[4]], pred.var = c("AvgFP_Prev14","AvgEP_Prev4"), train = slidedf_train$data[[4]]) %>% autoplot()
-
-temp <- slidedf_train$data[[3]]
-temp2 <- games_slide %>% filter(AvgAY_ToDate < 0, gsis_pos == "QB") %>% arrange(-ROCAvgFP)
-
-qbpred <- games_slide %>%
-  filter(gsis_pos == "QB")
-  
-qbpred <- qbpred %>%
-  bind_cols(pred = predict(slidedf_train$model[[3]], newdata = qbpred)) %>%
-  unnest(cols = c(pred)) %>%
-  rename(Next16Pred = pred) %>%
-  select(is.character, Next16Pred, game_id)
-
-LatestPrediction <- qbpred %>%
-  filter(substr(game_id,1,4) == 2018) %>%
-  group_by(player_id) %>%
-  mutate(game_id = as.character(game_id),
-          maxgame_id = max(game_id)) %>%
-  ungroup() %>%
-  dplyr::select(player_id, maxgame_id) %>%
-  distinct()
-
-QBs2020 <- qbpred %>%
-  inner_join(LatestPrediction, by = c("player_id","game_id" = "maxgame_id"))
-
-# vars <- games_slide %>% select(contains("Pass")) %>% names()
-# 
-# lm(as.formula(Next16_AvgFP ~ vars), data = games_slide)
