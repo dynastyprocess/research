@@ -102,6 +102,18 @@ tidied_pca %>%
 
 pca_juice <- juice(pca_prep)
 
+pca_dist <- pca_juice %>%
+  select(-division_name,-franchise_name) %>%
+  dist() %>%
+  as.matrix(nrow = nrow(pca_juice)) %>%
+  as_tibble() %>%
+  set_names(pca_juice$franchise_name) %>%
+  bind_cols(franchise_name = pca_juice$franchise_name,.)
+
+pca_sims <- pca_dist %>%
+  select(franchise_name,contains(user)) %>%
+  arrange(across(contains(user)))
+
 juice(pca_prep) %>%
   # filter(abs(PC1)>4& abs(PC2)>2) %>%
   ggplot(aes(PC3, PC4, label = franchise_name)) +
