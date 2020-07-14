@@ -102,6 +102,15 @@ tidied_pca %>%
 
 pca_juice <- juice(pca_prep)
 
+juice(pca_prep) %>%
+  # filter(abs(PC1)>4& abs(PC2)>2) %>%
+  ggplot(aes(PC3, PC4, label = franchise_name)) +
+  geom_point(aes(color = division_name), alpha = 0.7, size = 2) +
+  geom_text(check_overlap = TRUE, hjust = "inward") +
+  labs(color = NULL) +
+  hrbrthemes::theme_ft_rc(base_family = 'Arial') +
+  theme(legend.position = 'none')
+
 pca_dist <- pca_juice %>%
   select(-division_name,-franchise_name) %>%
   dist() %>%
@@ -114,12 +123,27 @@ pca_sims <- pca_dist %>%
   select(franchise_name,contains(user)) %>%
   arrange(across(contains(user)))
 
-juice(pca_prep) %>%
-  # filter(abs(PC1)>4& abs(PC2)>2) %>%
-  ggplot(aes(PC3, PC4, label = franchise_name)) +
-  geom_point(aes(color = division_name), alpha = 0.7, size = 2) +
-  geom_text(check_overlap = TRUE, hjust = "inward") +
-  labs(color = NULL) +
-  hrbrthemes::theme_ft_rc(base_family = 'Arial') +
-  theme(legend.position = 'none')
+df_kmeans <- pca_juice %>%
+  select(-division_name,-franchise_name) %>%
+  nest(data = everything()) %>%
+  crossing(k = 1:16) %>%
+  mutate(kclust = map2(data,k,kmeans),
+         tidied = map(kclust,tidy),
+         glanced = map(kclust,glance),
+         augmented = map2(kclust,data,augment))
 
+clusters <- df_kmeans %>%
+  unnest(cols = c(tidied))
+
+assignments <- df_kmeans %>%
+  unnest(cols = c(augmented))
+
+clusterings <- df_kmeans %>%
+  unnest(cols = c(glanced))
+
+p1 <- assignments %>%
+  ggplot(aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = .cluster), alpha = 0.8) +
+  facet_wrap(~ k)
+
+p1
