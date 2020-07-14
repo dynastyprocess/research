@@ -18,6 +18,7 @@ This notebook details research on SFBX Similarity Scores, by Tan Ho.
 
 # Data Import
 library(ffscrapr) # github: dynastyprocess/ffscrapr
+library(arrow)
 
 # Data Manipulation
 library(tidyverse) 
@@ -25,6 +26,7 @@ library(tidyverse)
 # Modelling
 library(tidymodels)
 library(tidytext)
+library(bbplot)
 
 # Report
 library(knitr)
@@ -34,6 +36,8 @@ library(DT)
 options(dplyr.summarise.inform = FALSE)
 
 knitr::opts_chunk$set(echo = TRUE)
+
+windowsFonts("Fira Sans Condensed" = windowsFont("Fira Sans Condensed"))
 
 ```
 
@@ -71,7 +75,11 @@ df_sfbpicks <- raw_sfbpicks %>%
   ungroup() %>%
   group_by(franchise_name,pos) %>%
   mutate(pos_slot = rank(pos_adp)) %>%
-  ungroup()
+  ungroup() %>% 
+  mutate(franchise_name = str_match(franchise_name,"\\((.*)\\)$"))
+
+write_parquet(df_sfbpicks,"sfb_picks.pdata")
+
 ```
 
 ## Player Similarity Score
@@ -85,7 +93,7 @@ user <- "TanHo"
 user_picks <- df_sfbpicks %>%
   filter(str_detect(franchise_name,user) & !is.na(player_name))
 
-sim_scores <- df_sfbpicks %>%
+simscores_player <- df_sfbpicks %>%
   mutate(sim_score = 1000*exp(-0.02 * pos_adp)) %>%
   select(timestamp,division_name,round,pick,franchise_name,player_id,player_name,pos,age,team,pos_adp,count,sim_score) %>%
   semi_join(user_picks,by = c('player_id')) %>%
@@ -95,7 +103,7 @@ sim_scores <- df_sfbpicks %>%
             matching_players = paste(player_name,collapse = " | ")) %>%
   arrange(desc(total_sim_score))
 
-head(sim_scores) %>% 
+head(simscores_player) %>% 
   datatable()
 
 ```
@@ -115,12 +123,19 @@ posadp_wide <- df_sfbpicks %>%
   select(division_name,franchise_name,pos,pos_slot,pos_adp) %>%
   mutate(pos = fct_relevel(pos,c("QB","RB","WR","TE"))) %>%
   arrange(franchise_name,pos,pos_slot) %>%
-  filter((pos %in% c("QB","TE") & pos_slot <=3) | (pos %in% c("RB","WR") & pos_slot <=6)) %>%
+  filter((pos %in% c("QB","TE") & pos_slot <=2) | (pos %in% c("RB","WR") & pos_slot <=4)) %>%
   pivot_wider(names_from = c(pos,pos_slot),
               names_sep = "",
-              values_fill = 100, # if they haven't taken one of these slots, assume positional-100
+              # values_fill = 100, # if they haven't taken one of these slots, assume posadp of 100
               values_from = pos_adp) %>%
-  select(division_name,franchise_name,starts_with("QB"),starts_with("RB"),starts_with("WR"),starts_with("TE"))
+  mutate(across(c(starts_with("QB"),starts_with("TE")),replace_na,50),
+         across(c(starts_with("RB"),starts_with("WR")),replace_na,100)) %>% 
+  select(division_name,
+         franchise_name,
+         starts_with("QB"),
+         starts_with("RB"),
+         starts_with("WR"),
+         starts_with("TE"))
 
 ```
 
@@ -142,22 +157,25 @@ pca_varexplained <- pca_prep %>%
   as_tibble_col("sdev") %>%
   mutate(component = unique(tidied_pca$component),
          percent_var = sdev^2/sum(sdev^2),
-         cumulative_var = cumsum(percent_var))
+         cumulative_var = cumsum(percent_var)) %>% 
+  select(component,sdev,percent_var,cumulative_var)
 
 pca_varexplained
 
 ```
 
 ```{r}
-tidied_pca %>%
-  filter(component %in% paste0("PC",1:5)) %>%
-  mutate(component = fct_inorder(component)) %>%
-  ggplot(aes(value,terms, fill = terms)) +
-  geom_col(show.legend = FALSE) +
-  facet_wrap(~component,nrow = 1) +
-  labs(y = NULL)
+# tidied_pca %>%
+#   filter(component %in% paste0("PC",1:8)) %>%
+#   mutate(component = fct_inorder(component)) %>%
+#   ggplot(aes(value,terms, fill = terms)) +
+#   geom_col(show.legend = FALSE) +
+#   facet_wrap(~component,nrow = 2) +
+#   hrbrthemes::theme_modern_rc(base_family = "Fira Sans Condensed") +
+#   theme(strip.text = element_text(colour = "white"))+
+#   labs(y = NULL)
 
-tidied_pca %>%
+plot_pcafactors <- tidied_pca %>%
   filter(component %in% paste0("PC", 1:6)) %>%
   group_by(component) %>%
   top_n(8, abs(value)) %>%
@@ -167,19 +185,17 @@ tidied_pca %>%
   geom_col() +
   facet_wrap(~component, scales = "free_y") +
   scale_y_reordered() +
-  # geom_text(size = 2,
-  #           data = pca_component_labels,
-  #           mapping = aes(label = label),
-  #           hjust = 1.05,
-  #           vjust = 1.05) +
   labs(
     title = "SFBX Strategic Spectrums",
     subtitle = "Important Factors for each Principal Component",
     x = "Importance of Factor to PC Score",
     y = NULL, fill = "Early or Late Pos ADP"
   ) +
-  theme_minimal() +
+  hrbrthemes::theme_modern_rc(base_family = "Fira Sans Condensed") +
+  theme(strip.text = element_text(colour = "white")) +
   theme(legend.position = "bottom") 
+
+plot_pcafactors
 
 ```
 
