@@ -8,6 +8,7 @@ suppressPackageStartupMessages({
   library(tidyr)
   library(forcats)
   library(rlang)
+  library(glue)
 
   # Shiny libs
   library(shiny)
@@ -32,6 +33,7 @@ pca_juice <- read_parquet("data/pca_juice.pdata")
 
 pca_dist <- read_parquet("data/pca_dist.pdata")
 
+pca_desc <- read_parquet("data/pca_descriptions.pdata")
 
 ui <- dashboardPage(
   ui_header("SFBX Similarity Scores"),
@@ -86,6 +88,19 @@ server <- function(input, output, session) {
 
   })
 
+  user_strategy <- reactive({
+
+    calculate_strategy(pca_juice,
+                       user(),
+                       pca_desc)
+
+  })
+
+  user_strategy_summary <- reactive({
+
+
+  })
+
   output$similarity_scores <- renderUI({
 
     req(user())
@@ -104,11 +119,8 @@ server <- function(input, output, session) {
 
   })
 
-user_strategy <- reactive({
 
-  calculate_strategy(pca_juice,user())
 
-})
 
 observe(user_strategy())
 

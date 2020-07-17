@@ -177,7 +177,7 @@ pca_varexplained
 #   labs(y = NULL)
 
 pca_factors <- tidied_pca %>%
-  filter(component %in% paste0("PC", 1:6)) %>%
+  filter(component %in% paste0("PC", 1:8)) %>%
   group_by(component) %>%
   top_n(8, abs(value)) %>%
   ungroup() %>%
@@ -194,13 +194,27 @@ plot_pcafactors <- pca_factors %>%
     title = "SFBX Strategic Spectrums",
     subtitle = "Important Factors for each Principal Component",
     x = "Importance of Factor to PC Score",
-    y = NULL, fill = "Early or Late Pos ADP"
+    y = NULL, 
+    fill = "Early or Late Pos ADP",
+    caption = "Each PC has a mirror opposite!"
   ) +
   hrbrthemes::theme_modern_rc(base_family = "Fira Sans Condensed") +
   theme(strip.text = element_text(colour = "white")) +
-  theme(legend.position = "bottom") 
+  theme(legend.position = "bottom") +
+  NULL
 
 plot_pcafactors
+
+pca_descriptions <- tribble(~'component',~"Positive",~"Negative",
+                            "PC1", "Punt WR for RB", "Punt RB for WR",
+                            "PC2", "Punt TE/QB for RB", "Punt RB for TE/QB",
+                            "PC3", "Punt TE/RB for QB", "Punt QB for TE/RB",
+                            "PC4", "Punt QB/RB for TE", "Punt TE for QB/RB",
+                            "PC5", "Anchor WRs", "Anchor RBs",
+                            "PC6", "Valuehunting", "Reaching for your guy") %>% 
+  pivot_longer(c(-'component'),names_to = "effect_direction",values_to = "effect_description")
+
+write_parquet(pca_descriptions,"data/pca_descriptions.pdata")
 
 ggsave("pca_factors.png",plot_pcafactors,dpi = 320,width = 7,height = 7)
 

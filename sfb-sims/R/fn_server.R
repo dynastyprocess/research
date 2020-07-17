@@ -46,11 +46,11 @@ calculate_strategysims <- function(pca_dist,user){
 
 }
 
-calculate_strategy <- function(pca_juice,user){
+calculate_strategy <- function(pca_juice,user,pca_desc){
 
   df <- pca_juice %>%
     filter(franchise_name == user) %>%
-    pivot_longer(c(-division_name,-franchise_name)) %>%
+    pivot_longer(c(-division_name,-franchise_name),names_to = "component") %>%
     mutate(effect_strength = case_when(abs(value) > 2 ~ "Very Strong",
                                        abs(value) > 1 ~ "Strong",
                                        abs(value) > 0.5 ~ "Moderate",
@@ -58,9 +58,20 @@ calculate_strategy <- function(pca_juice,user){
            effect_strength = suppressWarnings(fct_relevel(effect_strength,
                                                           c("Very Strong","Strong","Moderate","Weak"))),
            effect_direction = ifelse(value > 0, "Positive","Negative")) %>%
-    arrange(effect_strength)
+    arrange(desc(abs(value))) %>%
+    left_join(pca_desc, by = c("component","effect_direction")) %>%
+    filter(!is.na(effect_description))
 
   browser()
+
+  user_summary <- df %>%
+    group_by(effect_strength) %>%
+    summarise(desc = paste(effect_description,collapse = "; "))
+
+  paste("The Strategic Similarity model thinks this team has:",
+        unlist(paste(user_summary$effect_strength,"tendency for",user_summary$desc)),
+        collapse = ", "
+        )
 
   df
 }
