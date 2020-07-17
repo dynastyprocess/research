@@ -45,27 +45,39 @@ ui <- dashboardPage(
   dashboardBody(
     tabItem(tabName = "main",
             fluidRow(
-              box(title = "About",
-                  status = "danger",
-                  solidHeader = TRUE,
-                  width = 4),
-              box(title = "Select a Team!",
-                  status = "danger",
-                  width = 8,
-                  pickerInput("franchise_name","Franchise",
-                              choices = sfb_teams,
-                              selected = sample(sfb_teams,1),
-                              width = '100%',
-                              options = list(
-                                `live-search` = TRUE,
-                                `size` = 10
-                              )),
-                  footer = actionButton("load_franchise",
-                                        label = "Load Similarity Scores",
-                                        width = '100%',
-                                        class = 'btn-success')
-              )),
-            uiOutput('similarity_scores')
+            column(8,
+                   box(title = "Select a Team!",
+                       status = "danger",
+                       width = 12,
+                       pickerInput("franchise_name","Franchise",
+                                   choices = sfb_teams,
+                                   selected = sample(sfb_teams,1),
+                                   width = '100%',
+                                   options = list(
+                                     `live-search` = TRUE,
+                                     `size` = 10
+                                   )),
+                       br(),
+                       uiOutput("strategy_statement"),
+                       br(),
+                       footer = actionButton("load_franchise",
+                                             label = "Load Similarity Scores",
+                                             width = '100%',
+                                             class = 'btn-success')
+                   ),
+                   br(),
+                   uiOutput('similarity_scores')
+                   ),
+            column(4,
+
+                     box(title = "My Team",
+                         status = "danger",
+                         width = 12,
+                         DTOutput("my_team"))
+
+                   )
+
+            )
     )
   )
 )
@@ -73,6 +85,13 @@ ui <- dashboardPage(
 server <- function(input, output, session) {
 
   user <- eventReactive(input$load_franchise,input$franchise_name)
+
+  output$my_team <- renderDT({
+
+    get_team(sfb_picks,user()) %>%
+      datatable_myteam()
+
+  })
 
   simscores_player <- reactive( calculate_playersims(sfb_picks,user()) )
 
@@ -96,16 +115,13 @@ server <- function(input, output, session) {
 
   })
 
-  user_strategy_summary <- reactive({
-
-
-  })
+  output$strategy_statement <- renderUI(HTML(user_strategy()))
 
   output$similarity_scores <- renderUI({
 
     req(user())
 
-    bs4Dash::bs4CardLayout(type = "group",
+    bs4CardLayout(type = "group",
       box(title = "Similarity Scores: Players",
           status = "danger",
           width = NULL,
@@ -122,7 +138,7 @@ server <- function(input, output, session) {
 
 
 
-observe(user_strategy())
+# observe(user_strategy())
 
 }
 
