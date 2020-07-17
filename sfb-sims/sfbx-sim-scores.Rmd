@@ -75,10 +75,11 @@ df_sfbpicks <- raw_sfbpicks %>%
   ungroup() %>%
   group_by(franchise_name,pos) %>%
   mutate(pos_slot = rank(pos_adp)) %>%
-  ungroup() %>% 
-  mutate(franchise_name = str_match(franchise_name,"\\((.*)\\)$"))
+  ungroup()
 
-write_parquet(df_sfbpicks,"sfb_picks.pdata")
+df_sfbpicks %>%
+  select(division_name,franchise_name,player_id,player_name,pos,age,team,pos_adp,pos_slot) %>% 
+  write_parquet("data/sfb_picks.pdata")
 
 ```
 
@@ -123,7 +124,7 @@ posadp_wide <- df_sfbpicks %>%
   select(division_name,franchise_name,pos,pos_slot,pos_adp) %>%
   mutate(pos = fct_relevel(pos,c("QB","RB","WR","TE"))) %>%
   arrange(franchise_name,pos,pos_slot) %>%
-  filter((pos %in% c("QB","TE") & pos_slot <=2) | (pos %in% c("RB","WR") & pos_slot <=4)) %>%
+  filter((pos %in% c("QB","TE") & pos_slot <=3) | (pos %in% c("RB","WR") & pos_slot <=5)) %>%
   pivot_wider(names_from = c(pos,pos_slot),
               names_sep = "",
               # values_fill = 100, # if they haven't taken one of these slots, assume posadp of 100
@@ -175,12 +176,16 @@ pca_varexplained
 #   theme(strip.text = element_text(colour = "white"))+
 #   labs(y = NULL)
 
-plot_pcafactors <- tidied_pca %>%
+pca_factors <- tidied_pca %>%
   filter(component %in% paste0("PC", 1:6)) %>%
   group_by(component) %>%
   top_n(8, abs(value)) %>%
   ungroup() %>%
-  mutate(terms = reorder_within(terms, abs(value), component)) %>%
+  mutate(terms = reorder_within(terms, abs(value), component))
+
+write_parquet(pca_factors,"data/pca_factors.pdata")
+
+plot_pcafactors <- pca_factors %>% 
   ggplot(aes(abs(value), terms, fill = ifelse(value > 0,"Late","Early"))) +
   geom_col() +
   facet_wrap(~component, scales = "free_y") +
@@ -197,6 +202,8 @@ plot_pcafactors <- tidied_pca %>%
 
 plot_pcafactors
 
+ggsave("pca_factors.png",plot_pcafactors,dpi = 320,width = 7,height = 7)
+
 ```
 
 ```{r}
@@ -211,6 +218,8 @@ pca_juice <- juice(pca_prep)
 #   hrbrthemes::theme_ft_rc(base_family = 'Arial') +
 #   theme(legend.position = 'none')
 
+write_parquet(pca_juice,'data/pca_juice.pdata')
+
 ```
 
 # Sim Scores
@@ -224,6 +233,8 @@ pca_dist <- pca_juice %>%
   as_tibble() %>%
   set_names(pca_juice$franchise_name) %>%
   bind_cols(franchise_name = pca_juice$franchise_name,.)
+
+write_parquet(pca_dist, 'data/pca_dist.pdata')
 
 pca_sims <- pca_dist %>%
   select(franchise_name,contains(user)) %>%
@@ -269,7 +280,9 @@ ggplot(clusterings, aes(k, tot.withinss)) +
   geom_point() +
   labs(title = "How many clusters should we have?",
        subtitle = "Variance within each cluster - decreasing as more clusters are added") +
-  theme_minimal()
+  hrbrthemes::theme_modern_rc()
 ```
 
-8-9 clusters seem to be the point of diminishing returns!
+6 clusters seem to be the point of diminishing returns!
+
+
