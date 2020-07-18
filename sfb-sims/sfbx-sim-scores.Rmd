@@ -209,9 +209,11 @@ pca_descriptions <- tribble(~'component',~"Positive",~"Negative",
                             "PC1", "Punt WR for RB", "Punt RB for WR",
                             "PC2", "Punt TE/QB for RB", "Punt RB for TE/QB",
                             "PC3", "Punt TE/RB for QB", "Punt QB for TE/RB",
-                            "PC4", "Punt QB/RB for TE", "Punt TE for QB/RB",
+                            "PC4", "Early TEs + RB Depth over QB Depth", "QB Depth over RB/TE depth",
                             "PC5", "Anchor WRs", "Anchor RBs",
-                            "PC6", "Valuehunting", "Reaching for your guy") %>% 
+                            "PC6", "Value QBs and Depth", "Reaching on QBs and depth RB/WR",
+                            "PC7", "Anchor RB + Early QB2", "Late RB1/QB2",
+                            "PC8", "Anchor WR1/QB1 then reaches", "Reach on WR1/QB1 and values on depth") %>% 
   pivot_longer(c(-'component'),names_to = "effect_direction",values_to = "effect_description")
 
 write_parquet(pca_descriptions,"data/pca_descriptions.pdata")
@@ -258,7 +260,7 @@ pca_sims <- pca_dist %>%
 # Clustering
 via k-means
 
-```{r}
+```{r eval = FALSE}
 
 df_kmeans <- pca_juice %>%
   select(-division_name,-franchise_name) %>%
