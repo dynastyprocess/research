@@ -38,10 +38,11 @@ calculate_playersims <- function(sfb_picks,user){
 datatable_playersims <- function(df){
   df %>%
     mutate_if(is.numeric,round,2) %>%
+    mutate(franchise_name = str_trunc(franchise_name,60,"left")) %>%
     datatable(rownames = FALSE,
               selection = "none",
               class = "compact stripe nowrap",
-              extensions = "Responsive",
+              # extensions = "Responsive",
               options = list(
                 pageLength = 5,
                 scrollX = TRUE,
@@ -60,6 +61,7 @@ datatable_myteam <- function(df){
               options = list(
                 pageLength = 5,
                 scrollX = TRUE,
+                scrollY = 300,
                 paging = FALSE,
                 ordering = FALSE,
                 searching = FALSE,

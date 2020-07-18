@@ -9,6 +9,7 @@ suppressPackageStartupMessages({
   library(forcats)
   library(rlang)
   library(glue)
+  library(stringr)
 
   # Shiny libs
   library(shiny)
@@ -36,70 +37,76 @@ pca_dist <- read_parquet("data/pca_dist.pdata")
 pca_desc <- read_parquet("data/pca_descriptions.pdata")
 
 ui <- dashboardPage(
+  sidebar_collapsed = TRUE,
   ui_header("SFBX Similarity Scores"),
-  ui_sidebar(menuItem("Main",tabName = "main",icon = icon("quidditch",class = "white")),
-             external_menuItem(text
-                               = "Twitter",
-                               href = "https://twitter.com/_tanho",
-                               icon = icon("twitter",class = "white"))),
+  ui_sidebar(
+    menuItem("Main",tabName = "main",icon = icon("quidditch",class = "white")),
+    external_menuItem(text
+                      = "Twitter",
+                      href = "https://twitter.com/_tanho",
+                      icon = icon("twitter",class = "white"))),
   dashboardBody(
     tabItem(tabName = "main",
             fluidRow(
-            column(8,
-                   box(title = "Select a Team!",
-                       status = "danger",
-                       width = 12,
-                       pickerInput("franchise_name","Franchise",
-                                   choices = sfb_teams,
-                                   selected = sample(sfb_teams,1),
-                                   width = '100%',
-                                   options = list(
-                                     `live-search` = TRUE,
-                                     `size` = 10
-                                   )),
-                       br(),
-                       uiOutput("strategy_statement"),
-                       br(),
-                       footer = actionButton("load_franchise",
-                                             label = "Load Similarity Scores",
-                                             width = '100%',
-                                             class = 'btn-success')
-                   ),
-                   br(),
-                   uiOutput('similarity_scores')
-                   ),
-            column(4,
+              column(
+                width = 8,
+                box(title = "Select a Team!",
+                    status = "danger",
+                    width = 12,
+                    pickerInput("franchise_name","Franchise",
+                                choices = sfb_teams,
+                                selected = sample(sfb_teams,1),
+                                width = '100%',
+                                options = list(
+                                  `live-search` = TRUE,
+                                  `size` = 10
+                                )),
+                    br(),
+                    uiOutput("strategy_statement"),
+                    br(),
+                    footer = actionButton("load_franchise",
+                                          label = "Load Similarity Scores",
+                                          width = '100%',
+                                          class = 'btn-success')
+                ),
+                br(),
+                uiOutput('similarity_scores')
+              ),
+              column(4,
 
                      box(title = "My Team",
                          status = "danger",
                          width = 12,
                          DTOutput("my_team"))
-
-                   )
+              )
 
             )
     )
   )
 )
 
+
 server <- function(input, output, session) {
 
-  user <- eventReactive(input$load_franchise,input$franchise_name)
+  user <- eventReactive(input$load_franchise, input$franchise_name)
 
   output$my_team <- renderDT({
-
-    get_team(sfb_picks,user()) %>%
+    get_team(sfb_picks, user()) %>%
       datatable_myteam()
-
   })
 
-  simscores_player <- reactive( calculate_playersims(sfb_picks,user()) )
+  simscores_player <- reactive({
+    calculate_playersims(sfb_picks, user())
+    })
 
   output$dt_simscore_players <- renderDT({
     simscores_player() %>%
-      datatable_playersims() })
+      datatable_playersims()
+  })
 
-  simscores_strategy <- reactive(calculate_strategysims(pca_dist,user()))
+  simscores_strategy <- reactive({
+    calculate_strategysims(pca_dist, user())
+    })
 
   output$dt_simscore_strategies <- renderDT({
     simscores_strategy() %>%
@@ -108,37 +115,38 @@ server <- function(input, output, session) {
   })
 
   user_strategy <- reactive({
-
     calculate_strategy(pca_juice,
                        user(),
                        pca_desc)
 
   })
 
-  output$strategy_statement <- renderUI(HTML(user_strategy()))
+  output$strategy_statement <- renderUI({
+    HTML(user_strategy())
+    })
 
   output$similarity_scores <- renderUI({
 
     req(user())
 
-    bs4CardLayout(type = "group",
-      box(title = "Similarity Scores: Players",
-          status = "danger",
-          width = NULL,
-          DTOutput("dt_simscore_players")),
-      box(title = "Similarity Scores: Strategies",
-          status = "danger",
-          width = NULL,
-          DTOutput("dt_simscore_strategies")
+    bs4CardLayout(
+      type = "group",
+      box(
+        title = "Similarity Scores: Players",
+        status = "danger",
+        width = NULL,
+        DTOutput("dt_simscore_players")
+      ),
+      box(
+        title = "Similarity Scores: Strategies",
+        status = "danger",
+        width = NULL,
+        DTOutput("dt_simscore_strategies")
       )
     )
-
   })
 
-
-
-
-# observe(user_strategy())
+  # observe(user_strategy())
 
 }
 

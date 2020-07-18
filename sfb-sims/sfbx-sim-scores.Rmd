@@ -22,11 +22,13 @@ library(arrow)
 
 # Data Manipulation
 library(tidyverse) 
+library(stringr)
+library(stringi)
+
 
 # Modelling
 library(tidymodels)
 library(tidytext)
-library(bbplot)
 
 # Report
 library(knitr)
@@ -73,9 +75,13 @@ df_sfbpicks <- raw_sfbpicks %>%
   mutate(pos_adp = mean(pos_adp,na.rm = TRUE),
          count = n()) %>%
   ungroup() %>%
+  mutate(pos_adp = case_when(player_id == "11151" ~ 50,
+                             TRUE ~ pos_adp)) %>% 
   group_by(franchise_name,pos) %>%
   mutate(pos_slot = rank(pos_adp)) %>%
-  ungroup()
+  ungroup() %>% 
+  mutate(franchise_name = str_remove(franchise_name,"<[^>]*>"),
+         franchise_name = stri_trans_general(franchise_name,"latin-ascii"))
 
 df_sfbpicks %>%
   select(division_name,franchise_name,player_id,player_name,pos,age,team,pos_adp,pos_slot) %>% 
@@ -223,7 +229,8 @@ ggsave("pca_factors.png",plot_pcafactors,dpi = 320,width = 7,height = 7)
 ```
 
 ```{r}
-pca_juice <- juice(pca_prep)
+pca_juice <- juice(pca_prep) %>% 
+  mutate_if(is.factor,as.character)
 
 # juice(pca_prep) %>%
 #   # filter(abs(PC1)>4& abs(PC2)>2) %>%
@@ -290,7 +297,7 @@ p1
 
 ```
 
-```{r}
+```{r eval = FALSE}
 ggplot(clusterings, aes(k, tot.withinss)) +
   geom_line() +
   geom_point() +
