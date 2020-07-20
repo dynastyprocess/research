@@ -61,7 +61,7 @@ datatable_myteam <- function(df){
               options = list(
                 pageLength = 5,
                 scrollX = TRUE,
-                scrollY = 300,
+                # scrollY = 300,
                 paging = FALSE,
                 ordering = FALSE,
                 searching = FALSE,

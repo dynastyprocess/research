@@ -24,11 +24,14 @@ library(arrow)
 library(tidyverse) 
 library(stringr)
 library(stringi)
+library(furrr)
 
 
 # Modelling
 library(tidymodels)
 library(tidytext)
+library(ggridges)
+library(gghighlight)
 
 # Report
 library(knitr)
@@ -95,23 +98,52 @@ Improving on the standard "how many matches do you have" by weighting the positi
 
 
 ```{r echo = TRUE}
-user <- "TanHo"
+user <- "DLF, DynastyProcess - Tan Ho (@_TanHo)"
+# 
+# user_picks <- df_sfbpicks %>%
+#   filter(str_detect(franchise_name,user) & !is.na(player_name))
 
-user_picks <- df_sfbpicks %>%
-  filter(str_detect(franchise_name,user) & !is.na(player_name))
+player_scores <- df_sfbpicks %>% 
+  mutate(sim_score = 1000 * exp(-0.03 * pos_adp)) %>% 
+  select(franchise_name,player_id,player_name,sim_score)
 
-simscores_player <- df_sfbpicks %>%
-  mutate(sim_score = 1000*exp(-0.02 * pos_adp)) %>%
-  select(timestamp,division_name,round,pick,franchise_name,player_id,player_name,pos,age,team,pos_adp,count,sim_score) %>%
-  semi_join(user_picks,by = c('player_id')) %>%
-  group_by(franchise_name) %>%
-  summarise(total_sim_score = sum(sim_score,na.rm=TRUE),
-            matching_count = n(),
-            matching_players = paste(player_name,collapse = " | ")) %>%
-  arrange(desc(total_sim_score))
+calculate_playersims <- function(player_scores,user){
 
-head(simscores_player) %>% 
-  datatable()
+  options(dplyr.summarise.inform = FALSE)
+  
+  user_picks <- player_scores %>%
+    filter(franchise_name == user & !is.na(player_name))
+
+  player_scores %>% 
+    semi_join(user_picks,by = c('player_id')) %>%
+    group_by(franchise_name) %>%
+    summarise(total_sim_score = sum(sim_score,na.rm=TRUE),
+              total_sim_score = round(total_sim_score),
+              matching_count = n(),
+              matching_players = paste(player_name,collapse = "; ")) %>%
+    arrange(desc(total_sim_score)) %>%
+    slice(-1)
+
+}
+
+top_five_playersims <- function(user, player_scores){
+  calculate_playersims(player_scores, user) %>%
+    slice(1:5)
+}
+
+plan(multiprocess)
+
+player_sims <- tibble(sfb_teams = unique(df_sfbpicks$franchise_name)) %>%
+  mutate(sfb_sims = future_map(sfb_teams,top_five_playersims,player_scores)) %>% 
+  unnest(sfb_sims) %>%
+  mutate(scaled_simscores = scale(total_sim_score)) %>% 
+  group_by(sfb_teams) %>%
+  mutate(mean_sim_score = mean(scaled_simscores)) %>% 
+  group_by(sfb_teams,mean_sim_score) %>% 
+  nest(comparisons = c(franchise_name,total_sim_score,scaled_simscores,matching_count,matching_players)) %>% 
+  ungroup() %>% 
+  arrange(mean_sim_score) %>%
+  mutate(rank = rank(mean_sim_score,ties.method = "random"))
 
 ```
 # Strategic Similarity
@@ -229,6 +261,22 @@ ggsave("pca_factors.png",plot_pcafactors,dpi = 320,width = 7,height = 7)
 ```
 
 ```{r}
+
+pca_userplot <- pca_juice %>% 
+  filter(franchise_name %in% user) %>%
+  pivot_longer(c(-franchise_name,-division_name),names_to = "component") %>% 
+  ggplot(aes(x = component, y = value, color = franchise_name, tooltip = franchise_name, data_id = franchise_name)) +
+  ggiraph::geom_point_interactive() +
+  hrbrthemes::theme_modern_rc() +
+  coord_flip() +
+  theme(legend.position = "bottom")
+
+ggiraph::girafe(ggobj = pca_userplot)
+
+```
+
+
+```{r}
 pca_juice <- juice(pca_prep) %>% 
   mutate_if(is.factor,as.character)
 
@@ -293,7 +341,7 @@ p1 <- assignments %>%
   facet_wrap(~ k) +
   theme_minimal()
 
-p1
+p1 
 
 ```
 
