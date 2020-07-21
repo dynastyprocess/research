@@ -42,9 +42,9 @@ pca_desc <- read_parquet("data/pca_descriptions.pdata")
 options(dplyr.summarise.inform = FALSE)
 
 ui <- dashboardPage(
-  title = "SFBX Similarity Scores",
+  title = "SFBX Satellite Similarity Scores",
   sidebar_collapsed = TRUE,
-  ui_header("SFBX Similarity Scores"),
+  ui_header("SFBX Satellite Similarity Scores"),
   ui_sidebar(
     menuItem("Main",tabName = "main",icon = icon("quidditch",class = "white")),
     external_menuItem(text
@@ -52,7 +52,7 @@ ui <- dashboardPage(
                       href = "https://twitter.com/_tanho",
                       icon = icon("twitter",class = "white"))),
   dashboardBody(
-    use_font("roboto", "www/css/fira-sans.css"),
+    use_font("roboto", "www/css/fira-sans-condensed.css"),
     tabItem(tabName = "main",
             fluidRow(
               box(title = "Select a Team!",
