@@ -173,7 +173,7 @@ posadp_wide <- df_sfbpicks %>%
   filter((pos %in% c("QB","TE") & pos_slot <=3) | (pos %in% c("RB","WR") & pos_slot <=5)) %>%
   pivot_wider(names_from = c(pos,pos_slot),
               names_sep = "",
-              values_fn = length,
+              # values_fn = length,
               # values_fill = 100, # if they haven't taken one of these slots, assume posadp of 100
               values_from = pos_adp) %>%
   mutate(across(c(starts_with("QB"),starts_with("TE")),replace_na,50),
@@ -253,16 +253,16 @@ plot_pcafactors <- pca_factors %>%
 plot_pcafactors
 
 pca_descriptions <- tribble(~'component',~"Positive",~"Negative",
-                            "PC1", "Punt WR for RB", "Punt RB for WR",
+                            "PC1", "Punt RB for WR", "Punt WR for RB",
                             "PC2", "Punt TE/QB for RB", "Punt RB for TE/QB",
                             "PC3", "Early on QBs and Punt TE", "Early TEs and punt QBs",
                             "PC4", "Anchor WRs and better RB depth", "Anchor RBs and better WR depth",
-                            "PC5", "Early TE, early RB depth, Late QB3", "Early RB, late TE, early QB3",
-                            "PC6", "Anchor RB1/TE1 and reach on depth players", "Reach on RB1/TE1 and value plays on depth",
-                            "PC7", "Valuehunting at RB, QB, and WR", "Reaching for your guys at QB/RB/WR",
+                            "PC5", "Early RB/WR, late TE, early QB3", "Early TE, late RB/WR, late QB3",
+                            "PC6", "Reach for your guys", "Value hunting",
+                            "PC7", "Reaching at RB1/TE1", "Anchor RB1/TE1",
                             "PC8", "Reaching early and value late", "Value early and reaching late") %>% 
   pivot_longer(c(-'component'),names_to = "effect_direction",values_to = "effect_description")
-
+                            
 write_parquet(pca_descriptions,"data/pca_descriptions.pdata")
 
 ggsave("pca_factors.png",plot_pcafactors,dpi = 320,width = 10,height = 7)
@@ -319,9 +319,9 @@ pca_dist <- pca_juice %>%
 
 write_parquet(pca_dist, 'data/pca_dist.pdata')
 
-pca_sims <- pca_dist %>%
-  select(franchise_name,contains(user)) %>%
-  arrange(across(contains(user)))
+# pca_sims <- pca_dist %>%
+#   select(franchise_name,contains(user)) %>%
+#   arrange(across(contains(user)))
 ```
 
 # Clustering
