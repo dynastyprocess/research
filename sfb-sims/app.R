@@ -16,6 +16,8 @@ suppressPackageStartupMessages({
   library(bs4Dash)
   library(shinyWidgets)
   library(DT)
+  library(ggplot2)
+  library(plotly)
 
 })
 
@@ -61,25 +63,25 @@ ui <- dashboardPage(
                                 `live-search` = TRUE,
                                 `size` = 10
                               )),
+                  # br(),
+                  actionButton("load_franchise",
+                               label = "Load Similarity Scores",
+                               width = '100%',
+                               class = 'btn-success'),
+                  br(),
                   br(),
                   uiOutput("strategy_statement"),
                   br(),
-                  footer = actionButton("load_franchise",
-                                        label = "Load Similarity Scores",
-                                        width = '100%',
-                                        class = 'btn-success')
+                  uiOutput("comparison_picker")
               ),
               br(),
               column(8,uiOutput('similarity_scores')),
             ),
-            fluidRow(
-              box(title = "My Team",
-                  status = "danger",
-                  width = 4,
-                  DTOutput("my_team"))
-            )
-
-
+            # fluidRow(
+              uiOutput("pca_plot"),
+              # ),
+            br(),
+            fluidRow(uiOutput("team_tables"))
     )
   )
 )
@@ -87,11 +89,37 @@ ui <- dashboardPage(
 
 server <- function(input, output, session) {
 
-  user <- eventReactive(input$load_franchise, input$franchise_name)
+  user <- eventReactive(input$load_franchise, {input$franchise_name})
 
-  output$my_team <- renderDT({
-    get_team(sfb_picks, user()) %>%
-      datatable_myteam()
+  comparisons <- reactive({
+    req(input$comparison_1,input$comparison_2)
+
+    unique(c(input$comparison_1,input$comparison_2))
+
+  })
+
+  output$dt_teams <- renderDT({
+    get_teamrosters(sfb_picks, user(), comparisons()) %>%
+      datatable_myteam(user(),comparisons())
+  })
+
+  output$team_tables <- renderUI({
+
+    req(user(),comparisons())
+
+    box(title = "Roster Comparisons",
+        status = "danger",
+        maximizable = TRUE,
+        width = 12,
+        DTOutput("dt_teams"))
+  })
+
+  output$comparison_picker <- renderUI({
+
+    req(simscores_player(),simscores_strategy())
+
+    generate_comparisoninputs(simscores_strategy(),simscores_player())
+
   })
 
   simscores_player <- reactive({
@@ -118,7 +146,54 @@ server <- function(input, output, session) {
                        pca_desc)
   })
 
+  pca_data <- reactive({
+
+    calculate_pcatable(pca_juice,pca_desc,user(),comparisons())
+
+  })
+
+  output$pca_plotly <- renderPlotly({
+
+    plot <- pca_data() %>%
+      mutate(component = fct_relevel(component,paste0("PC",8:1))) %>%
+      ggplot(aes(x = component, y = value, color = franchise_name, text = effect_label)) +
+      geom_point() +
+      ylim(-5,5) +
+      # hrbrthemes::theme_modern_rc() +
+      ggplot2::theme_minimal() +
+      scale_color_brewer(palette = "Dark2")+
+      coord_flip() +
+      theme(legend.position = "bottom")
+
+    ggplotly(plot) %>%
+      layout(legend = list(orientation = "h", y = -1))
+
+    # girafe(ggobj = plot,
+    #        width_svg = 25,
+    #        height_svg = 10,
+    #        options = list(
+    #          opts_sizing(rescale = TRUE, width = 1)
+    #        ))
+
+  })
+
+  output$pca_plot <- renderUI({
+
+    req(user())
+
+    fluidRow(
+    box(title = "Strategy Comparison",
+        status = "danger",
+        maximizable = TRUE,
+        width = 12,
+        plotlyOutput('pca_plotly')
+        ))
+  })
+
   output$strategy_statement <- renderUI({
+
+    req(user())
+
     HTML(user_strategy())
     })
 
@@ -127,16 +202,18 @@ server <- function(input, output, session) {
     req(user())
 
     bs4CardLayout(
-      type = "deck",
+      type = "group",
       box(
         title = "Similarity Scores: Strategies",
         status = "danger",
+        maximizable = TRUE,
         width = NULL,
         DTOutput("dt_simscore_strategies")
       ),
       box(
         title = "Similarity Scores: Players",
         status = "danger",
+        maximizable = TRUE,
         width = NULL,
         DTOutput("dt_simscore_players")
       )

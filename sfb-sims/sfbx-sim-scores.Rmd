@@ -260,21 +260,6 @@ ggsave("pca_factors.png",plot_pcafactors,dpi = 320,width = 7,height = 7)
 
 ```
 
-```{r}
-
-pca_userplot <- pca_juice %>% 
-  filter(franchise_name %in% user) %>%
-  pivot_longer(c(-franchise_name,-division_name),names_to = "component") %>% 
-  ggplot(aes(x = component, y = value, color = franchise_name, tooltip = franchise_name, data_id = franchise_name)) +
-  ggiraph::geom_point_interactive() +
-  hrbrthemes::theme_modern_rc() +
-  coord_flip() +
-  theme(legend.position = "bottom")
-
-ggiraph::girafe(ggobj = pca_userplot)
-
-```
-
 
 ```{r}
 pca_juice <- juice(pca_prep) %>% 
@@ -290,6 +275,24 @@ pca_juice <- juice(pca_prep) %>%
 #   theme(legend.position = 'none')
 
 write_parquet(pca_juice,'data/pca_juice.pdata')
+
+```
+
+```{r}
+
+users <- c("DLF - Joe Sydlowski (@JoeSydlowskiFF)", "DLF, DynastyProcess - Tan Ho (@_TanHo)")
+
+pca_userplot <- pca_juice %>% 
+  filter(franchise_name %in% users) %>%
+  pivot_longer(c(-franchise_name,-division_name),names_to = "component") %>% 
+  mutate(component = fct_relevel(component,paste0("PC",8:1))) %>% 
+  ggplot(aes(x = component, y = value, color = franchise_name, tooltip = franchise_name, data_id = franchise_name)) +
+  ggiraph::geom_point_interactive() +
+  hrbrthemes::theme_modern_rc() +
+  coord_flip() +
+  theme(legend.position = "bottom")
+
+ggiraph::girafe(ggobj = pca_userplot,width_svg = 6, height = 4)
 
 ```
 
