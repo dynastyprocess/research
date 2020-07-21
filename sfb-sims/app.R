@@ -38,6 +38,8 @@ pca_dist <- read_parquet("data/pca_dist.pdata")
 
 pca_desc <- read_parquet("data/pca_descriptions.pdata")
 
+options(dplyr.summarise.inform = FALSE)
+
 ui <- dashboardPage(
   sidebar_collapsed = TRUE,
   ui_header("SFBX Similarity Scores"),
@@ -154,26 +156,7 @@ server <- function(input, output, session) {
 
   output$pca_plotly <- renderPlotly({
 
-    plot <- pca_data() %>%
-      mutate(component = fct_relevel(component,paste0("PC",8:1))) %>%
-      ggplot(aes(x = component, y = value, color = franchise_name, text = effect_label)) +
-      geom_point() +
-      ylim(-5,5) +
-      # hrbrthemes::theme_modern_rc() +
-      ggplot2::theme_minimal() +
-      scale_color_brewer(palette = "Dark2")+
-      coord_flip() +
-      theme(legend.position = "bottom")
-
-    ggplotly(plot) %>%
-      layout(legend = list(orientation = "h", y = -1))
-
-    # girafe(ggobj = plot,
-    #        width_svg = 25,
-    #        height_svg = 10,
-    #        options = list(
-    #          opts_sizing(rescale = TRUE, width = 1)
-    #        ))
+    generate_pcachart(pca_data())
 
   })
 
@@ -186,6 +169,10 @@ server <- function(input, output, session) {
         status = "danger",
         maximizable = TRUE,
         width = 12,
+
+        "This chart shows you where each of the teams in focus fall on each strategic axis. For more on this, see the article at {in-progress}.",
+        br(),
+
         plotlyOutput('pca_plotly')
         ))
   })

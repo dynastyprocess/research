@@ -185,3 +185,20 @@ calculate_pcatable <- function(pca_juice,pca_desc,user,comparisons){
     mutate(effect_label = paste(effect_strength,"tendency for",effect_description))
 
 }
+
+generate_pcachart <- function(pca_data){
+
+  plot <- pca_data %>%
+    mutate(component = fct_relevel(component,paste0("PC",8:1))) %>%
+    ggplot(aes(x = component, y = value, color = franchise_name, text = effect_label)) +
+    geom_point() +
+    ylim(-5,5) +
+    # hrbrthemes::theme_modern_rc() +
+    theme_minimal() +
+    scale_color_brewer(palette = "Dark2")+
+    coord_flip()
+
+  ggplotly(plot) %>%
+    layout(legend = list(orientation = "h", y = -1))
+
+}
