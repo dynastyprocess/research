@@ -41,6 +41,7 @@ pca_desc <- read_parquet("data/pca_descriptions.pdata")
 options(dplyr.summarise.inform = FALSE)
 
 ui <- dashboardPage(
+  title = "SFBX Similarity Scores",
   sidebar_collapsed = TRUE,
   ui_header("SFBX Similarity Scores"),
   ui_sidebar(
@@ -52,8 +53,6 @@ ui <- dashboardPage(
   dashboardBody(
     tabItem(tabName = "main",
             fluidRow(
-              # fluidRow(
-              # width = 4,
               box(title = "Select a Team!",
                   status = "danger",
                   width = 4,
@@ -79,9 +78,7 @@ ui <- dashboardPage(
               br(),
               column(8,uiOutput('similarity_scores')),
             ),
-            # fluidRow(
               uiOutput("pca_plot"),
-              # ),
             br(),
             fluidRow(uiOutput("team_tables"))
     )
@@ -207,7 +204,6 @@ server <- function(input, output, session) {
     )
   })
 
-  # observe(user_strategy())
 
 }
 
