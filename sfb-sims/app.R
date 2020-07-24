@@ -18,6 +18,7 @@ suppressPackageStartupMessages({
   library(DT)
   library(ggplot2)
   library(plotly)
+  # library(waiter) # github::johncoene/waiter
 
 })
 
@@ -50,6 +51,7 @@ ui <- dashboardPage(
                       href = "https://twitter.com/_tanho",
                       icon = icon("twitter",class = "white"))),
   dashboardBody(
+    use_waiter(),
     tabItem(tabName = "main",
             fluidRow(
               # fluidRow(
@@ -91,7 +93,13 @@ ui <- dashboardPage(
 
 server <- function(input, output, session) {
 
-  user <- eventReactive(input$load_franchise, {input$franchise_name})
+
+  # w <- Waiter$new(id = c("strategy_statement", "comparison_picker","pca_plot","team_tables","similarity_scores"))
+
+  user <- eventReactive(input$load_franchise, {
+    # w$show()
+    input$franchise_name
+    })
 
   comparisons <- reactive({
     req(input$comparison_1,input$comparison_2)
