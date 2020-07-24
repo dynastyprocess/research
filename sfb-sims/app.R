@@ -18,7 +18,7 @@ suppressPackageStartupMessages({
   library(DT)
   library(ggplot2)
   library(plotly)
-  # library(waiter) # github::johncoene/waiter
+  library(gfonts)
 
 })
 
@@ -42,6 +42,7 @@ pca_desc <- read_parquet("data/pca_descriptions.pdata")
 options(dplyr.summarise.inform = FALSE)
 
 ui <- dashboardPage(
+  title = "SFBX Similarity Scores",
   sidebar_collapsed = TRUE,
   ui_header("SFBX Similarity Scores"),
   ui_sidebar(
@@ -51,11 +52,9 @@ ui <- dashboardPage(
                       href = "https://twitter.com/_tanho",
                       icon = icon("twitter",class = "white"))),
   dashboardBody(
-    use_waiter(),
+    use_font("roboto", "www/css/fira-sans.css"),
     tabItem(tabName = "main",
             fluidRow(
-              # fluidRow(
-              # width = 4,
               box(title = "Select a Team!",
                   status = "danger",
                   width = 4,
@@ -81,9 +80,7 @@ ui <- dashboardPage(
               br(),
               column(8,uiOutput('similarity_scores')),
             ),
-            # fluidRow(
               uiOutput("pca_plot"),
-              # ),
             br(),
             fluidRow(uiOutput("team_tables"))
     )
@@ -215,7 +212,6 @@ server <- function(input, output, session) {
     )
   })
 
-  # observe(user_strategy())
 
 }
 
