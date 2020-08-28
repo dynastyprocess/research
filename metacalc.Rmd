@@ -1,0 +1,67 @@
+---
+title: "Calculator Log Meta Analysis"
+author: Tan
+---
+
+
+```{r warning=FALSE}
+
+library(DBI)
+library(odbc)
+library(tidyverse)
+library(hrbrthemes)
+
+aws_db <- dbConnect(odbc(),'dynastyprocess_db')
+
+calculator_logs <- dbGetQuery(aws_db,'SELECT * FROM dp_calculatorlogs')
+
+df_calc <- calculator_logs
+
+dbDisconnect(aws_db)
+```
+
+```{r}
+
+calc_types <- calculator_logs %>% 
+  count(input_calctype)
+
+calc_types
+```
+
+```{r}
+
+draft_types <- calculator_logs %>% 
+  count(input_drafttype)
+
+draft_types
+```
+```{r}
+qb_type <- calculator_logs %>% 
+  count(input_qb)
+qb_type
+```
+
+
+
+```{r}
+calculator_logs %>% 
+  # count(input_valuefactor) %>%
+  mutate(input_teams = parse_number(input_teams),
+         trade_diffs = abs(teamA_total-teamB_total),
+         trade_pct = pmap_dbl(list(trade_diffs,teamA_total,teamB_total),~..1/min(..2,..3))) %>%
+  filter(trade_diffs <= 10000,is.finite(trade_pct)) %>% 
+  # filter(trade_pct <=1) %>% 
+  ggplot() +
+  geom_step(aes(trade_pct),stat = 'ecdf',color = 'green',size = 1) +
+  coord_cartesian(xlim = c(0,1))+
+  # xlim(c(0,1))+
+  # geom_line(aes(x = ecdf(df$trade_diffs))) +
+  # geom_bar(aes(x = ecdf(trade_diffs))) +
+  theme_modern_rc()
+
+```
+
+```{r}
+
+```
+

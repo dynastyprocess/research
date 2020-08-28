@@ -1,0 +1,371 @@
+---
+title: "SFBX Sim Scores"
+author: "Tan Ho"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    code: hide
+  html_document:
+    df_print: paged
+---
+
+This notebook details research on SFBX Similarity Scores, by Tan Ho. 
+
+
+# Libraries
+
+```{r setup, include=FALSE}
+
+# Data Import
+library(ffscrapr) # github: dynastyprocess/ffscrapr
+library(arrow)
+
+# Data Manipulation
+library(tidyverse) 
+library(stringr)
+library(stringi)
+library(furrr)
+
+
+# Modelling
+library(tidymodels)
+library(tidytext)
+library(ggridges)
+library(gghighlight)
+
+# Report
+library(knitr)
+library(rmarkdown)
+library(DT)
+
+options(dplyr.summarise.inform = FALSE)
+
+knitr::opts_chunk$set(echo = TRUE)
+
+windowsFonts("Fira Sans Condensed" = windowsFont("Fira Sans Condensed"))
+
+```
+
+# Data Import
+
+```{r echo = TRUE}
+
+base_conn <- mfl_connect(2020,
+                         rate_limit_number = 2,
+                         rate_limit_seconds = 3,
+                         user_agent = "dynastyprocess/script")
+
+sfb_leagues <- mfl_getendpoint(base_conn,
+                               endpoint = "leagueSearch", 
+                               SEARCH = "#SFBX Satellite Conference") %>%
+  pluck("content","leagues","league") %>%
+  tibble() %>%
+  unnest_wider(1) %>%
+  mutate(conn = map(id,~mfl_connect(2020,
+                                    .x,
+                                    rate_limit_number = 6,
+                                    rate_limit_seconds = 10,
+                                    user_agent = "dynastyprocess/script"))) %>% 
+  filter(id !=39811)
+
+raw_sfbpicks <- map_dfr(sfb_leagues$conn,ff_draft)
+
+df_sfbpicks <- raw_sfbpicks %>% 
+  filter(!is.na(player_name)) %>%
+  group_by(division_name,pos) %>%
+  mutate(pos_adp = row_number()) %>%
+  ungroup() %>%
+  group_by(player_id,player_name,pos,team,age) %>%
+  mutate(pos_adp = mean(pos_adp,na.rm = TRUE),
+         count = n()) %>%
+  ungroup() %>%
+  mutate(pos_adp = case_when(player_id == "11151" ~ 50,
+                             TRUE ~ pos_adp)) %>% 
+  group_by(franchise_name,pos) %>%
+  mutate(pos_slot = rank(pos_adp,ties.method = "random")) %>%
+  ungroup() %>% 
+  mutate(franchise_name = str_remove(franchise_name,"<[^>]*>"),
+         franchise_name = case_when(
+           str_detect(franchise_name,"Mackgalloway34") & division_name == "Hungry Hippos" ~ "Hippos - @mackgalloway34",
+           str_detect(franchise_name,"Mackgalloway34") & division_name == "Barbie" ~ "Barbie - @mackgalloway34",
+           str_detect(franchise_name,"The_cal_alcorn") & division_name == "My Little Pony" ~ "My Little Pony - @the_cal_alcorn",
+           str_detect(franchise_name,"The_cal_alcorn") & division_name == "Battleship" ~ "Battleship - @the_cal_alcorn",
+           TRUE ~ franchise_name
+           ),
+         franchise_name = stri_trans_general(franchise_name,"latin-ascii"))
+
+df_sfbpicks %>%
+  select(division_name,franchise_name,player_id,player_name,pos,age,team,pos_adp,pos_slot) %>% 
+  write_parquet("data/sfb_picks.pdata")
+
+```
+
+## Player Similarity Score
+
+Improving on the standard "how many matches do you have" by weighting the positional adp with an exponential decay model (a-la-DynastyProcess trade values). Not perfect, but helps float the important matches up to the top.
+
+
+```{r echo = TRUE}
+user <- "DLF, DynastyProcess - Tan Ho (@_TanHo)"
+# 
+# user_picks <- df_sfbpicks %>%
+#   filter(str_detect(franchise_name,user) & !is.na(player_name))
+
+player_scores <- df_sfbpicks %>% 
+  mutate(sim_score = 1000 * exp(-0.03 * pos_adp)) %>% 
+  select(franchise_name,player_id,player_name,sim_score)
+
+calculate_playersims <- function(player_scores,user){
+
+  options(dplyr.summarise.inform = FALSE)
+  
+  user_picks <- player_scores %>%
+    filter(franchise_name == user & !is.na(player_name))
+
+  player_scores %>% 
+    semi_join(user_picks,by = c('player_id')) %>%
+    group_by(franchise_name) %>%
+    summarise(total_sim_score = sum(sim_score,na.rm=TRUE),
+              total_sim_score = round(total_sim_score),
+              matching_count = n(),
+              matching_players = paste(player_name,collapse = "; ")) %>%
+    arrange(desc(total_sim_score)) %>%
+    slice(-1)
+
+}
+
+top_five_playersims <- function(user, player_scores){
+  calculate_playersims(player_scores, user) %>%
+    slice(1:5)
+}
+
+plan(multiprocess)
+
+player_sims <- tibble(sfb_teams = unique(df_sfbpicks$franchise_name)) %>%
+  mutate(sfb_sims = future_map(sfb_teams,top_five_playersims,player_scores)) %>% 
+  unnest(sfb_sims) %>%
+  mutate(scaled_simscores = scale(total_sim_score)) %>% 
+  group_by(sfb_teams) %>%
+  mutate(mean_sim_score = mean(scaled_simscores)) %>% 
+  group_by(sfb_teams,mean_sim_score) %>% 
+  nest(comparisons = c(franchise_name,total_sim_score,scaled_simscores,matching_count,matching_players)) %>% 
+  ungroup() %>% 
+  arrange(mean_sim_score) %>%
+  mutate(rank = rank(mean_sim_score,ties.method = "random"))
+
+```
+# Strategic Similarity
+
+Tired: player similarity scores (or at least, already been done many times!)
+Wired: strategic similarity - what pos adp did they take each slot of their roster?
+
+Cleaning up to show positional adp for QB/TE 1-2 + RB/WR 1-4 in wide format, which will help with PCA-analysis of strategy
+
+[Why positional adp? Divisions were all over the place in terms of ADP, but positional adp are normalized across divisions]
+
+### Cleanup
+
+``` {r}
+posadp_wide <- df_sfbpicks %>%
+  select(division_name,franchise_name,pos,pos_slot,pos_adp) %>%
+  mutate(pos = fct_relevel(pos,c("QB","RB","WR","TE"))) %>%
+  arrange(franchise_name,pos,pos_slot) %>%
+  filter((pos %in% c("QB","TE") & pos_slot <=3) | (pos %in% c("RB","WR") & pos_slot <=5)) %>%
+  pivot_wider(names_from = c(pos,pos_slot),
+              names_sep = "",
+              # values_fn = length,
+              # values_fill = 100, # if they haven't taken one of these slots, assume posadp of 100
+              values_from = pos_adp) %>%
+  mutate(across(c(starts_with("QB"),starts_with("TE")),replace_na,50),
+         across(c(starts_with("RB"),starts_with("WR")),replace_na,100)) %>% 
+  select(division_name,
+         franchise_name,
+         starts_with("QB"),
+         starts_with("RB"),
+         starts_with("WR"),
+         starts_with("TE"))
+
+```
+
+### PCA
+(borrowed liberally from Julia Silge's https://juliasilge.com/blog/cocktail-recipes-umap/ guide)
+
+```{r}
+pca_rec <- recipe(~.,data = posadp_wide) %>%
+  update_role(division_name,franchise_name, new_role = "id") %>%
+  step_normalize(all_predictors()) %>%
+  step_pca(all_predictors(),threshold = 0.8) # "Give me enough PCs to explain 80% of variance"
+
+pca_prep <- prep(pca_rec)
+
+tidied_pca <- tidy(pca_prep,2)
+
+pca_varexplained <- pca_prep %>%
+  pluck("steps",2,"res","sdev") %>%
+  as_tibble_col("sdev") %>%
+  mutate(component = unique(tidied_pca$component),
+         percent_var = sdev^2/sum(sdev^2),
+         cumulative_var = cumsum(percent_var)) %>% 
+  select(component,sdev,percent_var,cumulative_var)
+
+pca_varexplained
+
+```
+
+```{r}
+# tidied_pca %>%
+#   filter(component %in% paste0("PC",1:8)) %>%
+#   mutate(component = fct_inorder(component)) %>%
+#   ggplot(aes(value,terms, fill = terms)) +
+#   geom_col(show.legend = FALSE) +
+#   facet_wrap(~component,nrow = 2) +
+#   hrbrthemes::theme_modern_rc(base_family = "Fira Sans Condensed") +
+#   theme(strip.text = element_text(colour = "white"))+
+#   labs(y = NULL)
+
+pca_factors <- tidied_pca %>%
+  filter(component %in% paste0("PC", 1:8)) %>%
+  group_by(component) %>%
+  top_n(8, abs(value)) %>%
+  ungroup() %>%
+  mutate(terms = reorder_within(terms, abs(value), component))
+
+write_parquet(pca_factors,"data/pca_factors.pdata")
+
+plot_pcafactors <- pca_factors %>% 
+  ggplot(aes(abs(value), terms, fill = ifelse(value > 0,"Late","Early"))) +
+  geom_col() +
+  facet_wrap(~component, scales = "free_y") +
+  scale_y_reordered() +
+  labs(
+    title = "SFBX Satellite Strategic Spectrums",
+    subtitle = "Important Factors for each Principal Component",
+    x = "Importance of Factor to PC Score",
+    y = NULL, 
+    fill = "Early or Late Pos ADP",
+    caption = "Each PC has a mirror opposite!"
+  ) +
+  hrbrthemes::theme_modern_rc(base_family = "Fira Sans Condensed") +
+  theme(strip.text = element_text(colour = "white")) +
+  theme(legend.position = "bottom") +
+  NULL
+
+plot_pcafactors
+
+pca_descriptions <- tribble(~'component',~"Positive",~"Negative",
+                            "PC1", "Punt RB for WR", "Punt WR for RB",
+                            "PC2", "Punt TE/QB for RB", "Punt RB for TE/QB",
+                            "PC3", "Early on QBs and Punt TE", "Early TEs and punt QBs",
+                            "PC4", "Anchor WRs and better RB depth", "Anchor RBs and better WR depth",
+                            "PC5", "Early RB/WR, late TE, early QB3", "Early TE, late RB/WR, late QB3",
+                            "PC6", "Reach for your guys", "Value hunting",
+                            "PC7", "Reaching at RB1/TE1", "Anchor RB1/TE1",
+                            "PC8", "Reaching early and value late", "Value early and reaching late") %>% 
+  pivot_longer(c(-'component'),names_to = "effect_direction",values_to = "effect_description")
+                            
+write_parquet(pca_descriptions,"data/pca_descriptions.pdata")
+
+ggsave("pca_factors.png",plot_pcafactors,dpi = 320,width = 10,height = 7)
+
+```
+
+
+```{r}
+pca_juice <- juice(pca_prep) %>% 
+  mutate_if(is.factor,as.character)
+
+# juice(pca_prep) %>%
+#   # filter(abs(PC1)>4& abs(PC2)>2) %>%
+#   ggplot(aes(PC3, PC4, label = franchise_name)) +
+#   geom_point(aes(color = division_name), alpha = 0.7, size = 2) +
+#   geom_text(check_overlap = TRUE, hjust = "inward") +
+#   labs(color = NULL) +
+#   hrbrthemes::theme_ft_rc(base_family = 'Arial') +
+#   theme(legend.position = 'none')
+
+write_parquet(pca_juice,'data/pca_juice.pdata')
+
+```
+
+```{r eval = FALSE}
+
+users <- c("DLF - Joe Sydlowski (@JoeSydlowskiFF)", "DLF, DynastyProcess - Tan Ho (@_TanHo)")
+
+pca_userplot <- pca_juice %>% 
+  filter(franchise_name %in% users) %>%
+  pivot_longer(c(-franchise_name,-division_name),names_to = "component") %>% 
+  mutate(component = fct_relevel(component,paste0("PC",8:1))) %>% 
+  ggplot(aes(x = component, y = value, color = franchise_name, tooltip = franchise_name, data_id = franchise_name)) +
+  ggiraph::geom_point_interactive() +
+  hrbrthemes::theme_modern_rc() +
+  coord_flip() +
+  theme(legend.position = "bottom")
+
+ggiraph::girafe(ggobj = pca_userplot,width_svg = 6, height = 4)
+
+```
+
+# Sim Scores
+via euclidean distance
+
+```{r}
+pca_dist <- pca_juice %>%
+  select(-division_name,-franchise_name) %>%
+  dist() %>%
+  as.matrix(nrow = nrow(pca_juice)) %>%
+  as_tibble() %>%
+  set_names(pca_juice$franchise_name) %>%
+  bind_cols(franchise_name = pca_juice$franchise_name,.)
+
+write_parquet(pca_dist, 'data/pca_dist.pdata')
+
+# pca_sims <- pca_dist %>%
+#   select(franchise_name,contains(user)) %>%
+#   arrange(across(contains(user)))
+```
+
+# Clustering
+via k-means
+
+```{r eval = FALSE}
+
+df_kmeans <- pca_juice %>%
+  select(-division_name,-franchise_name) %>%
+  nest(data = everything()) %>%
+  crossing(k = 1:16) %>%
+  mutate(kclust = map2(data,k,kmeans),
+         tidied = map(kclust,tidy),
+         glanced = map(kclust,glance),
+         augmented = map2(kclust,data,augment))
+
+clusters <- df_kmeans %>%
+  unnest(cols = c(tidied))
+
+assignments <- df_kmeans %>%
+  unnest(cols = c(augmented))
+
+clusterings <- df_kmeans %>%
+  unnest(cols = c(glanced))
+
+p1 <- assignments %>%
+  ggplot(aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = .cluster), alpha = 0.8) +
+  facet_wrap(~ k) +
+  theme_minimal()
+
+p1 
+
+```
+
+```{r eval = FALSE}
+ggplot(clusterings, aes(k, tot.withinss)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "How many clusters should we have?",
+       subtitle = "Variance within each cluster - decreasing as more clusters are added") +
+  hrbrthemes::theme_modern_rc()
+```
+
+6 clusters seem to be the point of diminishing returns!
+
+
