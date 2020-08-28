@@ -37,15 +37,19 @@ could result in high predictions for future UDFA RBs as a result.
 
 I used 6 variables (measured during the player’s final collegiate
 season) from the two methodologies linked above to tier the 57 RBs with
-Yards Created data over the past 5 years: \* draft\_pick - Overall pick
-number in the NFL draft \* Yards Created Variables + yc\_per\_attempt -
-Yards created per attempt + mtf\_per\_attempt - Missed tackles forced
-per attempt + rec\_yard\_per\_pass\_play - Receiving yards per pass play
-\* JJ’s Prospect Model + rec\_share - Share of team receptions +
-total\_yards\_per\_team\_play - Ratio of total yards divided by team
-plays
+Yards Created data over the past 5 years:
 
-![](rb_clusters_post_files/figure-gfm/unnamed-chunk-1-1.png)<!-- -->
+  - draft\_pick - Overall pick number in the NFL draft
+  - Yards Created Variables
+      - yc\_per\_attempt - Yards created per attempt
+      - mtf\_per\_attempt - Missed tackles forced per attempt
+      - rec\_yard\_per\_pass\_play - Receiving yards per pass play
+  - JJ’s Prospect Model
+      - rec\_share - Share of team receptions
+      - total\_yards\_per\_team\_play - Ratio of total yards divided by
+        team plays
+
+![](rb_clusters_post_files/figure-gfm/correlations-1.png)<!-- -->
 
 These 6 variables correlate to RB production per game in the first 4
 years of their careers. I interpet the Yards Created variables as a
@@ -59,20 +63,6 @@ efficiency in that offense. These measures of skill, volume, and
 efficiency create a strong foundation to create our tiers.
 
 ## Principal Component Analysis
-
-<!-- Using the the tidymodels package in R it only takes a few lines of code to create our PCA. First, I create a recipe which creates a step-by-step plan to perform the analysis: -->
-
-<!-- *The update_role command tells the recipe that we don't want to include the player's name or draft year as predictor variables. -->
-
-<!-- *The step_log command takes the log of the draft_pick variable since draft pick value is not linear. -->
-
-<!-- *Since Graham does not have public data for Antonio Gibson's yards created or receiving yards per pass play the step_medianimpute will fill in that missing data with the median values in those fields. -->
-
-<!-- *The step_normalize is an important function when doing PCA to center and scale the variables to the same magnitude. -->
-
-<!-- *Finally, I've chosen 6 principal components since that is enough to capture most of the variance in the underlying data here. -->
-
-<!-- After creating the recipe, the prep() command will actually execute the recipe so our components are ready to use. The tidy() command pulls our data into a usable format. -->
 
 Using the tidymodels package in R, I created 6 principal components from
 the 6 predictive metrics. The chart below demonstrates which of the
@@ -96,13 +86,1044 @@ and will need to be intrepreted on their own.
     forced, PC2 is defined by a weak yards created and strong missed
     tackles forced.
 
-![](rb_clusters_post_files/figure-gfm/unnamed-chunk-2-1.png)<!-- -->
+![](rb_clusters_post_files/figure-gfm/variable_importance-1.png)<!-- -->
 
-Below you can see the distributions of the predictive metrics in each of
-the Principal components. These curves demonstrate how the PCA
-functioned on the actual data.
+Below you can see a snapshot of the predictive metrics and examples from
+each of the Principal components. The important variables from each of
+the components can be seen here.
 
-![](rb_clusters_post_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
+<!--html_preserve-->
+
+<style>html {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Helvetica Neue', 'Fira Sans', 'Droid Sans', Arial, sans-serif;
+}
+
+#cttlfnjsip .gt_table {
+  display: table;
+  border-collapse: collapse;
+  margin-left: auto;
+  margin-right: auto;
+  color: #333333;
+  font-size: 16px;
+  background-color: #FFFFFF;
+  width: 100%;
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #A8A8A8;
+  border-right-style: none;
+  border-right-width: 2px;
+  border-right-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #A8A8A8;
+  border-left-style: none;
+  border-left-width: 2px;
+  border-left-color: #D3D3D3;
+}
+
+#cttlfnjsip .gt_heading {
+  background-color: #FFFFFF;
+  text-align: center;
+  border-bottom-color: #FFFFFF;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+}
+
+#cttlfnjsip .gt_title {
+  color: #333333;
+  font-size: 125%;
+  font-weight: initial;
+  padding-top: 4px;
+  padding-bottom: 4px;
+  border-bottom-color: #FFFFFF;
+  border-bottom-width: 0;
+}
+
+#cttlfnjsip .gt_subtitle {
+  color: #333333;
+  font-size: 85%;
+  font-weight: initial;
+  padding-top: 0;
+  padding-bottom: 4px;
+  border-top-color: #FFFFFF;
+  border-top-width: 0;
+}
+
+#cttlfnjsip .gt_bottom_border {
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+}
+
+#cttlfnjsip .gt_col_headings {
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+}
+
+#cttlfnjsip .gt_col_heading {
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: normal;
+  text-transform: inherit;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+  vertical-align: bottom;
+  padding-top: 5px;
+  padding-bottom: 6px;
+  padding-left: 5px;
+  padding-right: 5px;
+  overflow-x: hidden;
+}
+
+#cttlfnjsip .gt_column_spanner_outer {
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: normal;
+  text-transform: inherit;
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+#cttlfnjsip .gt_column_spanner_outer:first-child {
+  padding-left: 0;
+}
+
+#cttlfnjsip .gt_column_spanner_outer:last-child {
+  padding-right: 0;
+}
+
+#cttlfnjsip .gt_column_spanner {
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  vertical-align: bottom;
+  padding-top: 5px;
+  padding-bottom: 6px;
+  overflow-x: hidden;
+  display: inline-block;
+  width: 100%;
+}
+
+#cttlfnjsip .gt_group_heading {
+  padding: 8px;
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: initial;
+  text-transform: inherit;
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+  vertical-align: middle;
+}
+
+#cttlfnjsip .gt_empty_group_heading {
+  padding: 0.5px;
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: initial;
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  vertical-align: middle;
+}
+
+#cttlfnjsip .gt_from_md > :first-child {
+  margin-top: 0;
+}
+
+#cttlfnjsip .gt_from_md > :last-child {
+  margin-bottom: 0;
+}
+
+#cttlfnjsip .gt_row {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  padding-left: 5px;
+  padding-right: 5px;
+  margin: 10px;
+  border-top-style: solid;
+  border-top-width: 1px;
+  border-top-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 1px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 1px;
+  border-right-color: #D3D3D3;
+  vertical-align: middle;
+  overflow-x: hidden;
+}
+
+#cttlfnjsip .gt_stub {
+  color: #333333;
+  background-color: #FFFFFF;
+  font-size: 100%;
+  font-weight: initial;
+  text-transform: inherit;
+  border-right-style: solid;
+  border-right-width: 2px;
+  border-right-color: #D3D3D3;
+  padding-left: 12px;
+}
+
+#cttlfnjsip .gt_summary_row {
+  color: #333333;
+  background-color: #FFFFFF;
+  text-transform: inherit;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
+#cttlfnjsip .gt_first_summary_row {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #D3D3D3;
+}
+
+#cttlfnjsip .gt_grand_summary_row {
+  color: #333333;
+  background-color: #FFFFFF;
+  text-transform: inherit;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
+#cttlfnjsip .gt_first_grand_summary_row {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 5px;
+  padding-right: 5px;
+  border-top-style: double;
+  border-top-width: 6px;
+  border-top-color: #D3D3D3;
+}
+
+#cttlfnjsip .gt_striped {
+  background-color: rgba(128, 128, 128, 0.05);
+}
+
+#cttlfnjsip .gt_table_body {
+  border-top-style: solid;
+  border-top-width: 2px;
+  border-top-color: #D3D3D3;
+  border-bottom-style: solid;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+}
+
+#cttlfnjsip .gt_footnotes {
+  color: #333333;
+  background-color: #FFFFFF;
+  border-bottom-style: none;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 2px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 2px;
+  border-right-color: #D3D3D3;
+}
+
+#cttlfnjsip .gt_footnote {
+  margin: 0px;
+  font-size: 90%;
+  padding: 4px;
+}
+
+#cttlfnjsip .gt_sourcenotes {
+  color: #333333;
+  background-color: #FFFFFF;
+  border-bottom-style: none;
+  border-bottom-width: 2px;
+  border-bottom-color: #D3D3D3;
+  border-left-style: none;
+  border-left-width: 2px;
+  border-left-color: #D3D3D3;
+  border-right-style: none;
+  border-right-width: 2px;
+  border-right-color: #D3D3D3;
+}
+
+#cttlfnjsip .gt_sourcenote {
+  font-size: 90%;
+  padding: 4px;
+}
+
+#cttlfnjsip .gt_left {
+  text-align: left;
+}
+
+#cttlfnjsip .gt_center {
+  text-align: center;
+}
+
+#cttlfnjsip .gt_right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+#cttlfnjsip .gt_font_normal {
+  font-weight: normal;
+}
+
+#cttlfnjsip .gt_font_bold {
+  font-weight: bold;
+}
+
+#cttlfnjsip .gt_font_italic {
+  font-style: italic;
+}
+
+#cttlfnjsip .gt_super {
+  font-size: 65%;
+}
+
+#cttlfnjsip .gt_footnote_marks {
+  font-style: italic;
+  font-size: 65%;
+}
+</style>
+
+<div id="cttlfnjsip" style="overflow-x:auto;overflow-y:auto;width:auto;height:auto;">
+
+<table class="gt_table" style="table-layout: fixed;; width: 100%">
+
+<colgroup>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col/>
+
+<col style="width:15%;"/>
+
+</colgroup>
+
+<thead class="gt_col_headings">
+
+<tr>
+
+<th class="gt_col_heading gt_center gt_columns_bottom_border" rowspan="2" colspan="1">
+
+Cluster
+
+</th>
+
+<th class="gt_col_heading gt_center gt_columns_bottom_border" rowspan="2" colspan="1">
+
+Count
+
+</th>
+
+<th class="gt_center gt_columns_top_border gt_column_spanner_outer" rowspan="1" colspan="4">
+
+<span class="gt_column_spanner">Outcome Metrics</span>
+
+</th>
+
+<th class="gt_center gt_columns_top_border gt_column_spanner_outer" rowspan="1" colspan="6">
+
+<span class="gt_column_spanner">PCA Metrics</span>
+
+</th>
+
+<th class="gt_col_heading gt_center gt_columns_bottom_border" rowspan="2" colspan="1">
+
+Example Players
+
+</th>
+
+</tr>
+
+<tr>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+PPR PPG
+
+</th>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+Rec YPG
+
+</th>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+Rush YPG
+
+</th>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+FPOE/ Game
+
+</th>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+Draft Pick
+
+</th>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+YC/ Att
+
+</th>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+MTF/ Att
+
+</th>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+Rec Yards/ Pass
+
+</th>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+Rec Share
+
+</th>
+
+<th class="gt_col_heading gt_columns_bottom_border gt_center" rowspan="1" colspan="1">
+
+Yards/ Team Play
+
+</th>
+
+</tr>
+
+</thead>
+
+<tbody class="gt_table_body">
+
+<tr>
+
+<td class="gt_row gt_left">
+
+PC5
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #EFE5F0; color: #000000;">
+
+8
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+16.0
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+28.7
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #D9F0D3; color: #000000;">
+
+67.2
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #F7F7F7; color: #000000;">
+
+0.54
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+33.5
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #EFE5F0; color: #000000;">
+
+4.61
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #D9F0D3; color: #000000;">
+
+0.40
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #EFE5F0; color: #000000;">
+
+1.30
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #F7F7F7; color: #000000;">
+
+11.2%
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #C2A5CF; color: #000000;">
+
+1.54
+
+</td>
+
+<td class="gt_row gt_left" style="font-size: small;">
+
+Leonard Fournette, Christian Mccaffrey, Josh Jacobs
+
+</td>
+
+</tr>
+
+<tr>
+
+<td class="gt_row gt_left">
+
+PC2
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #EFE5F0; color: #000000;">
+
+8
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #D9F0D3; color: #000000;">
+
+12.6
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E7D4E8; color: #000000;">
+
+13.3
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+67.9
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+1.67
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #D9F0D3; color: #000000;">
+
+40.0
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+5.46
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #F7F7F7; color: #000000;">
+
+0.38
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+0.75
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+4.5%
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #D9F0D3; color: #000000;">
+
+1.87
+
+</td>
+
+<td class="gt_row gt_left" style="font-size: small;">
+
+Ezekiel Elliott, D’Onta Foreman, Nick Chubb
+
+</td>
+
+</tr>
+
+<tr>
+
+<td class="gt_row gt_left">
+
+PC4
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #CBB1D5; color: #000000;">
+
+7
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #F7F7F7; color: #000000;">
+
+11.7
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #F7F7F7; color: #000000;">
+
+18.2
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E7D4E8; color: #000000;">
+
+45.2
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #D9F0D3; color: #000000;">
+
+0.60
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #F7F7F7; color: #000000;">
+
+73.0
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E1F2DC; color: #000000;">
+
+5.41
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #C2A5CF; color: #000000;">
+
+0.33
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E1F2DC; color: #000000;">
+
+2.00
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E7D4E8; color: #000000;">
+
+11.1%
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E7D4E8; color: #000000;">
+
+1.61
+
+</td>
+
+<td class="gt_row gt_left" style="font-size: small;">
+
+James Conner, Darrell Henderson, Jonathan Taylor
+
+</td>
+
+</tr>
+
+<tr>
+
+<td class="gt_row gt_left">
+
+PC6
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+6
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E7D4E8; color: #000000;">
+
+10.6
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #D9F0D3; color: #000000;">
+
+19.6
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #F7F7F7; color: #000000;">
+
+55.6
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E7D4E8; color: #000000;">
+
+0.10
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E7D4E8; color: #000000;">
+
+86.0
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #CBB1D5; color: #000000;">
+
+4.61
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+0.42
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+2.30
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #D9F0D3; color: #000000;">
+
+11.6%
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #F7F7F7; color: #000000;">
+
+1.81
+
+</td>
+
+<td class="gt_row gt_left" style="font-size: small;">
+
+Kenneth Dixon, Joe Mixon, Zack Moss
+
+</td>
+
+</tr>
+
+<tr>
+
+<td class="gt_row gt_left">
+
+PC1
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+19
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #C2A5CF; color: #000000;">
+
+7.7
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+11.0
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #C2A5CF; color: #000000;">
+
+33.1
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+−0.26
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #C2A5CF; color: #000000;">
+
+114.0
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #EFE5F0; color: #000000;">
+
+4.61
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+0.29
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #CBB1D5; color: #000000;">
+
+0.90
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #C2A5CF; color: #000000;">
+
+7.3%
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+1.31
+
+</td>
+
+<td class="gt_row gt_left" style="font-size: small;">
+
+Wayne Gallman, Kalen Ballage, Mark Walton
+
+</td>
+
+</tr>
+
+<tr>
+
+<td class="gt_row gt_left">
+
+PC3
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E1F2DC; color: #000000;">
+
+9
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+6.5
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #C2A5CF; color: #000000;">
+
+11.6
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+21.6
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #C2A5CF; color: #000000;">
+
+−0.15
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+136.0
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #9970AB; color: #000000;">
+
+4.43
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #E7D4E8; color: #000000;">
+
+0.36
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #EFE5F0; color: #000000;">
+
+1.30
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+13.5%
+
+</td>
+
+<td class="gt_row gt_center" style="background-color: #A6DBA0; color: #000000;">
+
+1.98
+
+</td>
+
+<td class="gt_row gt_left" style="font-size: small;">
+
+Jeremy McNichols, Rashaad Penny, Eno Benjamin
+
+</td>
+
+</tr>
+
+</tbody>
+
+</table>
+
+</div>
+
+<!--/html_preserve-->
+
+<!-- # ```{r, echo = FALSE, message = FALSE, warning = FALSE} -->
+
+<!-- # rb_clusters_wide %>% -->
+
+<!-- #   select(name, Cluster, draft_pick, yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, rec_share, total_yards_per_team_play) %>% -->
+
+<!-- #   pivot_longer(cols = where(is.numeric), names_to = "Metric") %>% -->
+
+<!-- #   mutate(Metric = factor(Metric, levels = c('draft_pick', 'yc_per_attempt', 'mtf_per_attempt', 'rec_yard_per_pass_play', -->
+
+<!-- #                                             "rec_share", "total_yards_per_team_play"))) %>% -->
+
+<!-- #   ggplot(aes(value, Cluster, fill = 100*stat(ecdf))) +  -->
+
+<!-- #   stat_density_ridges(geom = "density_ridges_gradient", -->
+
+<!-- #                       calc_ecdf = TRUE, -->
+
+<!-- #                       quantiles = 4, -->
+
+<!-- #                       quantile_lines = TRUE, -->
+
+<!-- #                       jittered_points = TRUE, -->
+
+<!-- #                       position = "points_sina", -->
+
+<!-- #                       alpha = 0.8, -->
+
+<!-- #                       point_color = "black" -->
+
+<!-- #   ) +  -->
+
+<!-- #   labs(title = "Distribution of Predictive Variables by Tier", -->
+
+<!-- #        y = NULL, -->
+
+<!-- #        fill = "Percentile") + -->
+
+<!-- #   facet_wrap(~Metric, -->
+
+<!-- #              scales = "free_x", -->
+
+<!-- #              nrow = 3, -->
+
+<!-- #              labeller = as_labeller(c('draft_pick' = 'Overall Draft Pick', -->
+
+<!-- #                                       'yc_per_attempt' = 'Yards Created per attempt', -->
+
+<!-- #                                       'mtf_per_attempt' = 'Missed Tackles Forced per attempt', -->
+
+<!-- #                                       'rec_yard_per_pass_play' = 'Receiving Yards per pass play', -->
+
+<!-- #                                       'rec_share' = 'Reception Share', -->
+
+<!-- #                                       'total_yards_per_team_play' = 'Total Yards per team play'))) -->
+
+<!-- # ``` -->
 
 ## Results
 
@@ -136,4 +1157,4 @@ the site before the start of the season.
     required to draw any conclusions. Both tiers clearly beat out PC1
     and PC3 in most metrics.
 
-![](rb_clusters_post_files/figure-gfm/unnamed-chunk-4-1.png)<!-- -->
+![](rb_clusters_post_files/figure-gfm/unnamed-chunk-1-1.png)<!-- -->
