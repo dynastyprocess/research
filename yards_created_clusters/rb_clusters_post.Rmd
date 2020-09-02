@@ -5,11 +5,12 @@ output:
   github_document:
     toc: true
     toc_depth: 3
+always_allow_html: true
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_chunk$set(fig.width=12, fig.height=8) 
+knitr::opts_chunk$set(echo = FALSE, fig.width=12, fig.height=8) 
+
 
 #Load Libraries
 library(here)
@@ -26,10 +27,11 @@ library(ggthemes)
 ggplot2::theme_set(ggthemes::theme_fivethirtyeight())
 
 #Load Data
-here()
+setwd(here::here())
 yards_created_df <- read_csv("yards_created_data.csv") %>%
-  mutate(name = str_to_lower(name)) %>%
-  select(name, draft_year, draft_pick, yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, rec_share, total_yards_per_team_play)
+  mutate(name_cap = name,
+         name = str_to_lower(name)) %>%
+  select(name, name_cap, draft_year, draft_pick, yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, rec_share, total_yards_per_team_play)
 
 pbp <- read_parquet("../ep/data/fit_data/ep_1999_2019.pdata")
 
@@ -37,11 +39,14 @@ rb_seasons <- pbp %>%
   filter(season >= 2016, gsis_pos == "RB") %>%
   group_by(season, gsis_id, gsis_name) %>%
   summarise(rec_ypg = mean(rec_yd, na.rm = TRUE),
+            rec_total = sum(rec_yd, na.rm = TRUE),
             rush_ypg = mean(rush_yd, na.rm = TRUE),
+            rush_total = sum(rush_yd, na.rm = TRUE),
             ppr_ppg = mean(total_fp, na.rm = TRUE),
             ppr_total = sum(total_fp, na.rm = TRUE),
             ep_per_game = mean(total_fp_x, na.rm = TRUE),
             ep_diff_per_game = mean(total_fp_diff, na.rm = TRUE),
+            ep_total_diff = sum(total_fp_diff, na.rn = TRUE),
             games = n()) %>%
   ungroup() %>%
   arrange(gsis_id, gsis_name, season) %>%
@@ -50,19 +55,26 @@ rb_seasons <- pbp %>%
          gsis_name = str_to_lower(gsis_name)) %>%
   ungroup()
 
-rb_seaons_wide <- rb_seasons %>%
-    select(-season) %>%
-    pivot_wider(names_from = season_number,
-                values_from = c(rec_ypg, rush_ypg, ppr_ppg, ppr_total, ep_per_game, ep_diff_per_game, games),
-                names_glue = "{.value}_y{season_number}") %>%
-    rowwise() %>%
-    mutate(ppr_ppg_total = sum(ppr_total_y1, ppr_total_y2, ppr_total_y3, ppr_total_y4, na.rm = TRUE) /
-                           sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE)) %>%
-    ungroup()
+rb_seasons_wide <- rb_seasons %>%
+  select(-season) %>%
+  pivot_wider(names_from = season_number,
+              values_from = c(rec_ypg, rec_total, rush_ypg, rush_total, ppr_ppg, ppr_total, ep_per_game, ep_diff_per_game, ep_total_diff, games),
+              names_glue = "{.value}_y{season_number}") %>%
+  rowwise() %>%
+  mutate(ppr_ppg_total = sum(ppr_total_y1, ppr_total_y2, ppr_total_y3, ppr_total_y4, na.rm = TRUE) /
+                         sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE),
+         rec_ypg_total = sum(rec_total_y1, rec_total_y2, rec_total_y3, rec_total_y4, na.rm = TRUE) /
+                         sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE),
+         rush_ypg_total = sum(rush_total_y1, rush_total_y2, rush_total_y3, rush_total_y4, na.rm = TRUE) /
+                         sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE),
+         ep_diff_per_game_total = sum(ep_total_diff_y1, ep_total_diff_y2, ep_total_diff_y3, ep_total_diff_y4, na.rm = TRUE) /
+                         sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE)
+         ) %>%
+  ungroup()
 
 #Principal Component Analysis  
 pca_rec <- recipe(~., data = yards_created_df) %>%
-  update_role(name, draft_year, new_role = "id") %>%
+  update_role(name, name_cap, draft_year, new_role = "id") %>%
   step_log(draft_pick) %>%
   step_medianimpute(all_predictors()) %>%
   step_normalize(all_predictors()) %>%
@@ -77,8 +89,8 @@ rb_clusters_wide <- juice(pca_prep) %>%
   group_by(name) %>%
   filter(value == max(value)) %>%
   ungroup() %>%
-  left_join(rb_seaons_wide, by = c("name" = "gsis_name")) %>%
-  left_join(yards_created_df, by = c("name", "draft_year"))
+  left_join(rb_seasons_wide, by = c("name" = "gsis_name")) %>%
+  left_join(yards_created_df, by = c("name", "name_cap", "draft_year"))
 
 rb_seasons_clusters <- rb_clusters_wide %>%
   select(name, draft_year, Cluster) %>%
@@ -95,6 +107,40 @@ rb_seasons_clusters <- rb_clusters_wide %>%
   mutate_if(is.numeric, ~replace(., is.na(.), 0)) %>%
   pivot_longer(cols = where(is.numeric), names_to = "Metric")
 
+# rb_median_metrics <- rb_seasons_clusters %>%
+#   pivot_wider()
+#   group_by(Cluster) %>%
+#   median(ppr_ppg = median(ppr_ppg)) %>%
+#   ungroup()
+
+cluster_examples <- rb_clusters_wide %>% 
+  select(name_cap, draft_year, Cluster, value) %>% 
+  group_by(Cluster) %>% 
+  top_n(n=3, wt=value) %>%
+  summarise(cluster_examples = paste(name_cap, collapse = ", ")) %>%
+  ungroup()
+
+summarydf <- rb_clusters_wide %>%
+  group_by(Cluster) %>%
+  summarise(across(where(is.numeric), median, na.rm = TRUE),
+            player_count = n()) %>% 
+  ungroup() %>%
+  select(Cluster,
+         player_count,
+         ppr_ppg_total,
+         rec_ypg_total,
+         rush_ypg_total,
+         ep_diff_per_game_total,
+         draft_pick,
+         yc_per_attempt,
+         mtf_per_attempt,
+         rec_yard_per_pass_play,
+         rec_share,
+         total_yards_per_team_play) %>% 
+  arrange(desc(ppr_ppg_total)) %>% 
+  left_join(cluster_examples,by = "Cluster") %>%
+  mutate(across(where(is.numeric), ~round(.,3)))
+
 ```
 
 ## Introduction
@@ -108,6 +154,7 @@ An unsupervised machine learning model does not have an outcome variable, which 
 ## Exploring the Data
 
 I used 6 variables (measured during the player's final collegiate season) from the two methodologies linked above to tier the 57 RBs with Yards Created data over the past 5 years:
+
 * draft_pick - Overall pick number in the NFL draft
 * Yards Created Variables
   + yc_per_attempt - Yards created per attempt
@@ -117,10 +164,10 @@ I used 6 variables (measured during the player's final collegiate season) from t
   + rec_share - Share of team receptions
   + total_yards_per_team_play - Ratio of total yards divided by team plays
 
-```{r, echo = FALSE, message = FALSE, warning = FALSE}
+```{r correlations, echo = FALSE, message = FALSE, warning = FALSE}
 yards_created_df %>%
-  left_join(rb_seaons_wide, by = c("name" = "gsis_name")) %>%
-  select(ppr_ppg_total, draft_pick, yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, rec_share, total_yards_per_team_play) %>%
+  left_join(rb_seasons_wide, by = c("name" = "gsis_name")) %>%
+  transmute(ppr_ppg_total, log(draft_pick), yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, rec_share, total_yards_per_team_play) %>%
   ggpairs(lower = list(continuous = wrap("smooth")))
 
 ```
@@ -129,15 +176,6 @@ These 6 variables correlate to RB production per game in the first 4 years of th
 
 ## Principal Component Analysis
 
-<!-- Using the the tidymodels package in R it only takes a few lines of code to create our PCA. First, I create a recipe which creates a step-by-step plan to perform the analysis: -->
-<!-- *The update_role command tells the recipe that we don't want to include the player's name or draft year as predictor variables. -->
-<!-- *The step_log command takes the log of the draft_pick variable since draft pick value is not linear. -->
-<!-- *Since Graham does not have public data for Antonio Gibson's yards created or receiving yards per pass play the step_medianimpute will fill in that missing data with the median values in those fields. -->
-<!-- *The step_normalize is an important function when doing PCA to center and scale the variables to the same magnitude. -->
-<!-- *Finally, I've chosen 6 principal components since that is enough to capture most of the variance in the underlying data here. -->
-
-<!-- After creating the recipe, the prep() command will actually execute the recipe so our components are ready to use. The tidy() command pulls our data into a usable format. -->
-
 Using the tidymodels package in R, I created 6 principal components from the 6 predictive metrics. The chart below demonstrates which of the variables contribute most strongly, either positively or negatively, to each component. Keep in mind that a smaller draft pick is actually better so the blue bars are later draft picks, while the red bars are earlier draft picks. The components PC1-PC6 are not ordered in any way and will need to be intrepreted on their own.
 
 * First, compare and contrast PC2 to PC5 which are strongly defined by early round picks. Whereas PC2 focuses on weak receiving metrics and strong measures of efficiency and yards created, a strong receiving share is more important to PC5.
@@ -145,7 +183,7 @@ Using the tidymodels package in R, I created 6 principal components from the 6 p
 * Finally, PC4 and PC6 also make for an interesting duo. Draft pick does not play an significant role in either composition, but where PC4 is defined by a strong yards created and weak missed tackles forced, PC2 is defined by a weak yards created and strong missed tackles forced.
 
 
-```{r, echo = FALSE, message = FALSE, warning = FALSE}
+```{r variable_importance, echo = FALSE, message = FALSE, warning = FALSE}
 tidied_pca %>%
   filter(component %in% paste0("PC", 1:6)) %>%
   group_by(component) %>%
@@ -164,37 +202,110 @@ tidied_pca %>%
 
 ```
 
-Below you can see the distributions of the predictive metrics in each of the Principal components. These curves demonstrate how the PCA functioned on the actual data.
+Below you can see a snapshot of the predictive metrics and examples from each of the Principal components. The important variables from each of the components can be seen here.
 
-```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.height=10}
-rb_clusters_wide %>%
-  select(name, Cluster, draft_pick, yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, rec_share, total_yards_per_team_play) %>%
-  pivot_longer(cols = where(is.numeric), names_to = "Metric") %>%
-  mutate(Metric = factor(Metric, levels = c('draft_pick', 'yc_per_attempt', 'mtf_per_attempt', 'rec_yard_per_pass_play',
-                                            "rec_share", "total_yards_per_team_play"))) %>%
-  ggplot(aes(value, Cluster, fill = 100*stat(ecdf))) + 
-  stat_density_ridges(geom = "density_ridges_gradient",
-                      calc_ecdf = TRUE,
-                      quantiles = 4,
-                      quantile_lines = TRUE,
-                      jittered_points = TRUE,
-                      position = "points_sina",
-                      alpha = 0.8,
-                      point_color = "black"
-  ) + 
-  labs(title = "Distribution of Predictive Variables by Tier",
-       y = NULL,
-       fill = "Percentile") +
-  facet_wrap(~Metric,
-             scales = "free_x",
-             nrow = 3,
-             labeller = as_labeller(c('draft_pick' = 'Overall Draft Pick',
-                                      'yc_per_attempt' = 'Yards Created per attempt',
-                                      'mtf_per_attempt' = 'Missed Tackles Forced per attempt',
-                                      'rec_yard_per_pass_play' = 'Receiving Yards per pass play',
-                                      'rec_share' = 'Reception Share',
-                                      'total_yards_per_team_play' = 'Total Yards per team play')))
+```{r cluster_summary, echo = FALSE, message = FALSE, warning = FALSE, fig.width=16}
+# library(kableExtra)
+# summarydf %>%
+#   mutate(ppr_ppg_total = cell_spec(ppr_ppg_total, background = spec_color(1:6, alpha = 0.5))) %>%
+#   knitr::kable(booktabs = TRUE) %>%
+#   kable_styling(c("compact","stripe","nowrap"))
+
+library(gt)
+library(RColorBrewer)
+
+cols <- summarydf %>%
+  select(is.numeric, -draft_pick) %>%
+  colnames()
+
+cols2 <- summarydf %>%
+  select(is.numeric) %>%
+  colnames()
+
+gt(summarydf) %>%
+  data_color(
+    columns = cols,
+    colors = scales::col_factor(
+      #palette = 'PRGn',
+      brewer.pal(12,'PRGn')[3:8],
+      domain = NULL
+    )) %>%
+  data_color(
+    columns = vars(draft_pick),
+    colors = scales::col_factor(
+      #palette = 'PRGn',
+      brewer.pal(12,'PRGn')[8:3],
+      domain = NULL
+    )) %>%
+  cols_label(
+    Cluster = "Cluster",
+    player_count = "Count",
+    ppr_ppg_total = "PPR PPG",
+    rec_ypg_total = "Rec YPG",
+    rush_ypg_total = "Rush YPG",
+    ep_diff_per_game_total = "FPOE/ Game",
+    draft_pick = "Draft Pick",
+    yc_per_attempt = "YC/ Att",
+    mtf_per_attempt = "MTF/ Att",
+    rec_yard_per_pass_play = "Rec Yards/ Pass",
+    rec_share = "Rec Share",
+    total_yards_per_team_play = "Yards/ Team Play",
+    cluster_examples = "Example Players") %>%
+  cols_align(align = "center",
+             columns = cols2) %>%
+  fmt_number(
+    columns = vars(ppr_ppg_total, rec_ypg_total, rush_ypg_total, draft_pick),
+    decimals  = 1) %>%
+  fmt_number(
+    columns = vars(ep_diff_per_game_total, yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, total_yards_per_team_play),
+    decimals  = 2) %>%  
+  fmt_percent(
+    columns = vars(rec_share),
+    decimals = 1) %>%
+  tab_style(style = cell_text(size = "small"),
+            locations = cells_body(columns = vars(cluster_examples))) %>%
+  tab_spanner(
+    label = "Outcome Metrics",
+    columns = vars(ppr_ppg_total, rec_ypg_total, rush_ypg_total, ep_diff_per_game_total))%>%
+  tab_spanner(
+    label = "PCA Metrics",
+    columns = vars(draft_pick, yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, rec_share, total_yards_per_team_play)) %>%
+  cols_width(vars(cluster_examples) ~ pct(15)) %>%
+  tab_options(table.width = pct(100),
+               data_row.padding = px(1))
+  
 ```
+
+
+<!-- # ```{r, echo = FALSE, message = FALSE, warning = FALSE} -->
+<!-- # rb_clusters_wide %>% -->
+<!-- #   select(name, Cluster, draft_pick, yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, rec_share, total_yards_per_team_play) %>% -->
+<!-- #   pivot_longer(cols = where(is.numeric), names_to = "Metric") %>% -->
+<!-- #   mutate(Metric = factor(Metric, levels = c('draft_pick', 'yc_per_attempt', 'mtf_per_attempt', 'rec_yard_per_pass_play', -->
+<!-- #                                             "rec_share", "total_yards_per_team_play"))) %>% -->
+<!-- #   ggplot(aes(value, Cluster, fill = 100*stat(ecdf))) +  -->
+<!-- #   stat_density_ridges(geom = "density_ridges_gradient", -->
+<!-- #                       calc_ecdf = TRUE, -->
+<!-- #                       quantiles = 4, -->
+<!-- #                       quantile_lines = TRUE, -->
+<!-- #                       jittered_points = TRUE, -->
+<!-- #                       position = "points_sina", -->
+<!-- #                       alpha = 0.8, -->
+<!-- #                       point_color = "black" -->
+<!-- #   ) +  -->
+<!-- #   labs(title = "Distribution of Predictive Variables by Tier", -->
+<!-- #        y = NULL, -->
+<!-- #        fill = "Percentile") + -->
+<!-- #   facet_wrap(~Metric, -->
+<!-- #              scales = "free_x", -->
+<!-- #              nrow = 3, -->
+<!-- #              labeller = as_labeller(c('draft_pick' = 'Overall Draft Pick', -->
+<!-- #                                       'yc_per_attempt' = 'Yards Created per attempt', -->
+<!-- #                                       'mtf_per_attempt' = 'Missed Tackles Forced per attempt', -->
+<!-- #                                       'rec_yard_per_pass_play' = 'Receiving Yards per pass play', -->
+<!-- #                                       'rec_share' = 'Reception Share', -->
+<!-- #                                       'total_yards_per_team_play' = 'Total Yards per team play'))) -->
+<!-- # ``` -->
 
 ## Results
 

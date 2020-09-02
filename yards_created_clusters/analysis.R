@@ -6,18 +6,13 @@ library(tidymodels)
 library(skimr)
 library(tidytext)
 library(ggridges)
-library(PerformanceAnalytics)
+library(GGally)
+library(ggthemes)
+ggplot2::theme_set(ggthemes::theme_fivethirtyeight())
 
 # Load Data ---------------------------------------------------------------
-here()
+setwd(here())
 pbp <- read_parquet("../ep/data/fit_data/ep_1999_2019.pdata")
-
-# college_rb <- read_csv("pahowdy_rb_data.csv") %>%
-#   filter(draft_year >= 2016) %>%
-#   mutate(name = str_to_lower(name),
-#          draft_year = as.double(draft_year),
-#          power5 = if_else(conference %in% c("ACC","Big 12", "Big Ten", "Pac-12", "SEC"), 1, 0)) %>%
-#   select(name, draft_year, power5, WaSS, HaSS, BMI)
 
 yards_created_df <- read_csv("yards_created_data.csv") %>%
   mutate(name = str_to_lower(name)) %>%
@@ -28,10 +23,14 @@ rb_seasons <- pbp %>%
   filter(season >= 2016, gsis_pos == "RB") %>%
   group_by(season, gsis_id, gsis_name) %>%
   summarise(rec_ypg = mean(rec_yd, na.rm = TRUE),
+            rec_total = sum(rec_yd, na.rm = TRUE),
             rush_ypg = mean(rush_yd, na.rm = TRUE),
+            rush_total = sum(rush_yd, na.rm = TRUE),
             ppr_ppg = mean(total_fp, na.rm = TRUE),
+            ppr_total = sum(total_fp, na.rm = TRUE),
             ep_per_game = mean(total_fp_x, na.rm = TRUE),
             ep_diff_per_game = mean(total_fp_diff, na.rm = TRUE),
+            ep_total_diff = sum(total_fp_diff, na.rn = TRUE),
             games = n()) %>%
   ungroup() %>%
   arrange(gsis_id, gsis_name, season) %>%
@@ -40,33 +39,44 @@ rb_seasons <- pbp %>%
          gsis_name = str_to_lower(gsis_name)) %>%
   ungroup()
 
-rb_seaons_wide <- rb_seasons %>%
+rb_seasons_wide <- rb_seasons %>%
   select(-season) %>%
   pivot_wider(names_from = season_number,
-              values_from = c(rec_ypg, rush_ypg, ppr_ppg, ppr_total, ep_per_game, ep_diff_per_game, games),
+              values_from = c(rec_ypg, rec_total, rush_ypg, rush_total, ppr_ppg, ppr_total, ep_per_game, ep_diff_per_game, ep_total_diff, games),
               names_glue = "{.value}_y{season_number}") %>%
   rowwise() %>%
   mutate(ppr_ppg_total = sum(ppr_total_y1, ppr_total_y2, ppr_total_y3, ppr_total_y4, na.rm = TRUE) /
-           sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE)) %>%
+                         sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE),
+         rec_ypg_total = sum(rec_total_y1, rec_total_y2, rec_total_y3, rec_total_y4, na.rm = TRUE) /
+                         sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE),
+         rush_ypg_total = sum(rush_total_y1, rush_total_y2, rush_total_y3, rush_total_y4, na.rm = TRUE) /
+                         sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE),
+         ep_diff_per_game_total = sum(ep_total_diff_y1, ep_total_diff_y2, ep_total_diff_y3, ep_total_diff_y4, na.rm = TRUE) /
+                         sum(games_y1, games_y2, games_y3, games_y4, na.rm = TRUE)
+         ) %>%
   ungroup()
 
 # Correlation plots -------------------------------------------------------
 skim(yards_created_df)
 
-library(GGally)
-library(ggthemes)
-ggplot2::theme_set(ggthemes::theme_fivethirtyeight())
-
 yards_created_df %>%
-  left_join(rb_seaons_wide, by = c("name" = "gsis_name")) %>%
+  left_join(rb_seasons_wide, by = c("name" = "gsis_name")) %>%
   transmute(ppr_ppg_total, log(draft_pick), yc_per_attempt, mtf_per_attempt, rec_yard_per_pass_play, rec_share, total_yards_per_team_play) %>%
   ggpairs(lower = list(continuous = wrap("smooth")))
 
 lm1 <- yards_created_df %>%
-  left_join(rb_df, by = c("name" = "gsis_name")) %>%
-  lm(ppr_ppg_y1 ~ log(draft_pick) + yc_per_attempt + yc_over5_rate + rec_share + total_yards_per_team_play + total_td_share, data = .)
+  left_join(rb_seasons_wide, by = c("name" = "gsis_name")) %>%
+  lm(ppr_ppg_total ~ log(draft_pick) + yc_per_attempt + rec_share + total_yards_per_team_play + mtf_per_attempt, data = .)
 
 summary(lm1)
+
+lm2 <- yards_created_df %>%
+  left_join(rb_seasons_wide, by = c("name" = "gsis_name")) %>%
+  lm(draft_pick ~ yc_per_attempt + rec_share + total_yards_per_team_play + mtf_per_attempt, data = .)
+
+summary(lm2)
+
+
 
 # Clustering --------------------------------------------------------------
 pca_rec <- recipe(~., data = yards_created_df) %>%
@@ -82,10 +92,17 @@ tidied_pca <- tidy(pca_prep, 4)
 
 rb_clusters_wide <- juice(pca_prep) %>%
   pivot_longer(cols = starts_with("PC"), names_to = "Cluster") %>%
+  arrange(name, -value) %>%
   group_by(name) %>%
+  # filter(row_number() == 1 | row_number() == 2) %>%
+  # mutate(rn = row_number()) %>%
+  # select(-Cluster) %>%
+  # pivot_wider(values_from = c(value), names_from = rn) %>%
+  # mutate(`2`-`1`)
+
   filter(value == max(value)) %>%
   ungroup() %>%
-  left_join(rb_seaons_wide, by = c("name" = "gsis_name")) %>%
+  left_join(rb_seasons_wide, by = c("name" = "gsis_name")) %>%
   left_join(yards_created_df, by = c("name", "draft_year"))
 
 rb_seasons_clusters <- rb_clusters_wide %>%
@@ -105,10 +122,45 @@ rb_seasons_clusters <- rb_clusters_wide %>%
 
 skim(rb_clusters_wide)
 
-summary <- rb_clusters_wide %>%
+# summary <- rb_clusters_wide %>%
+#   group_by(Cluster) %>%
+#   summarise(across(where(is.numeric), mean, na.rm = TRUE),
+#             players = n())
+
+rookie_examples <- rb_clusters_wide %>% 
+  select(name,draft_year,Cluster) %>% 
+  filter(draft_year == 2020) %>% 
+  group_by(Cluster) %>% 
+  summarise(rookie_examples = paste(name,collapse = ","))
+
+cluster_examples <- rb_clusters_wide %>% 
+  select(name, draft_year, Cluster, value) %>% 
+  group_by(Cluster) %>% 
+  top_n(n=3, wt=value) %>%
+  summarise(cluster_examples = paste(name,collapse = ", "))
+
+summarydf <- rb_clusters_wide %>%
   group_by(Cluster) %>%
   summarise(across(where(is.numeric), mean, na.rm = TRUE),
-            players = n())
+            player_count = n()) %>% 
+  select(Cluster,
+         ppr_ppg_total,
+         rec_ypg_total,
+         rush_ypg_total,
+         ep_diff_per_game_total,
+         player_count,
+         draft_pick,
+         yc_per_attempt,
+         mtf_per_attempt,
+         rec_yard_per_pass_play,
+         rec_share,
+         total_yards_per_team_play) %>% 
+  arrange(desc(ppr_ppg_total)) %>% 
+  left_join(cluster_examples,by = "Cluster") %>%
+  mutate(across(where(is.numeric), ~round(.,2)))
+
+
+
 
 # Visualizations ----------------------------------------------------------
 
