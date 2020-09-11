@@ -4,7 +4,7 @@ library(here)
 
 setwd(here())
 
-league_id <- 22627
+league_id <- 60206
 
 get_weeklyscore <- function(year, week){
   
@@ -33,24 +33,24 @@ get_weeklyscore <- function(year, week){
                                     pos %in% c("PK","PN","Def","ST","Coach","TMPK","TMPN") ~ "off",
                                     TRUE ~ "ERROR"),
            player_score = as.numeric(player_score),
-           projected_score = as.numeric(projected_score)) %>% 
-    group_by(id, pos_category, score, opt_pts, result) %>%
-    summarise(total_points = sum(if_else(player_status == "starter", player_score, 0), na.rm = TRUE),
-              opt_points = sum(if_else(player_shouldStart == 1, player_score, 0), na.rm = TRUE),
-              starter_projection = sum(if_else(player_status == "starter", projected_score, 0), na.rm = TRUE)) %>%
-    ungroup() %>% 
-    pivot_wider(id_cols = c("id", "score", "opt_pts", "result"),
-                names_from = pos_category,
-                values_from = c(total_points, opt_points, starter_projection),
-                names_glue = "{pos_category}_{.value}") %>%
-    mutate(check_total = off_total_points + def_total_points,
-           check_opt = off_opt_points + def_opt_points,
-           all_play_wins = rank(score)-1,
-           all_play_games = n()-1)
+           projected_score = as.numeric(projected_score)) #%>% 
+    # group_by(id, pos_category, score, opt_pts, result) %>%
+    # summarise(total_points = sum(if_else(player_status == "starter", player_score, 0), na.rm = TRUE),
+    #           opt_points = sum(if_else(player_shouldStart == 1, player_score, 0), na.rm = TRUE),
+    #           starter_projection = sum(if_else(player_status == "starter", projected_score, 0), na.rm = TRUE)) %>%
+    # ungroup() %>% 
+    # pivot_wider(id_cols = c("id", "score", "opt_pts", "result"),
+    #             names_from = pos_category,
+    #             values_from = c(total_points, opt_points, starter_projection),
+    #             names_glue = "{pos_category}_{.value}") %>%
+    # mutate(check_total = off_total_points + def_total_points,
+    #        check_opt = off_opt_points + def_opt_points,
+    #        all_play_wins = rank(score)-1,
+    #        all_play_games = n()-1)
 }
 
 weekly_df <- crossing(year = 2019:2019,
-                       week = 1:4) %>%
+                       week = 1:16) %>%
   mutate(week_scores = map2(year,week,get_weeklyscore)) %>%
   unnest("week_scores")
 
@@ -66,19 +66,24 @@ temp <- df %>%
 
 #Correlation Plot
 library(ggpubr)
-df %>%
+weekly_df %>%
   mutate(player_score = if_else(is.na(player_score),0,player_score),
-         pos = factor(pos, levels = c("QB","RB","WR","TE","DT","DE","LB","S","CB"))) %>% 
+         pos = factor(pos, levels = c("QB","RB","WR","TE","DT","DE","LB","S","CB","PK","PN"))) %>% 
   ggscatter(x = "player_score",
             y = "projected_score",
             add = "reg.line",
             conf.int = TRUE, 
             #cor.coef = TRUE,
-            cor.method = "pearson") +
+            cor.method = "pearson",
+            alpha = 0.05) +
   facet_wrap(~pos, scales = "free") +
-  labs(title = "FantasySharks Correlations by Position Week 8, 2019") +
+  labs(title = "FantasySharks Correlations by Position ADL 2019") +
   theme_bw() +
   stat_cor(
     aes(label = paste(..rr.label.., ..p.label.., sep = "~`,`~")), 
-    label.x = 3
+    label.x = 1
   )
+
+weekly_df %>%
+  group_by(pos) %>%
+  tally()
