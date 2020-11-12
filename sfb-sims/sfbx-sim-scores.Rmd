@@ -18,6 +18,7 @@ This notebook details research on SFBX Similarity Scores, by Tan Ho.
 # Data Import
 library(ffscrapr) # github: dynastyprocess/ffscrapr
 library(arrow)
+library(here)
 
 # Data Manipulation
 library(tidyverse) 
@@ -390,7 +391,17 @@ standings <- map_dfr(sfb_leagues$conn,ff_standings)%>%
 
 results <- df_assignments %>% 
   left_join(standings, by = "franchise_name") %>% 
-  select(ends_with('name'),cluster = .cluster,starts_with("PC"),starts_with('h2h'),starts_with('allplay'),points_for,potential_points)
+  select(ends_with('name'),
+         cluster = .cluster,
+         points_for,
+         potential_points,
+         starts_with("PC"),
+         starts_with('h2h'),
+         starts_with('allplay'),
+         ) %>% 
+  arrange(desc(points_for))
+
+
 
 cluster_descriptions <- df_clusterings %>% 
   select(cluster = .cluster,starts_with("PC")) %>% 
@@ -425,6 +436,7 @@ results_summary <- results %>%
     by = "cluster") %>% 
   arrange(desc(points_for))
   
-
+write_csv(results,here("results_by_franchise.csv"))
+write_csv(results,here("results_by_cluster.csv"))
 
 ```
