@@ -25,7 +25,6 @@ library(stringr)
 library(stringi)
 library(furrr)
 
-
 # Modelling
 library(tidymodels)
 library(tidytext)
@@ -242,16 +241,18 @@ plot_pcafactors <- pca_factors %>%
 
 plot_pcafactors
 
-pca_descriptions <- tribble(~'component',~"Positive",~"Negative",
-                            "PC1", "Punt WR for RB", "Punt RB for WR",
-                            "PC2", "Punt TE/QB for RB", "Punt RB for TE/QB",
-                            "PC3", "Punt TE/RB for QB", "Punt QB for TE/RB",
-                            "PC4", "Early TEs + RB Depth over QB Depth", "QB Depth over RB/TE depth",
-                            "PC5", "Anchor WRs", "Anchor RBs",
-                            "PC6", "Value QBs and Depth", "Reaching on QBs and depth RB/WR",
-                            "PC7", "Anchor RB + Early QB2", "Late RB1/QB2",
-                            "PC8", "Anchor WR1/QB1 then reaches", "Reach on WR1/QB1 and values on depth") %>% 
+pca_descriptions <- tribble(
+  ~'component',~"Positive",~"Negative",
+  "PC1", "Punt RB for WR", "Punt WR for RB",
+  "PC2", "Punt RB for TE", "Punt TE for RB",
+  "PC3", "Punt QB for RB/TE", "Punt RB/TE for QB",
+  "PC4", "RB Depth + Early TE over QB Depth", "QB Depth over RB/TE depth",
+  "PC5", "Anchor WRs", "Anchor RBs",
+  "PC6", "Value QBs and Depth", "Reaching on QBs and depth RB/WR",
+  "PC7", "Late RB1/QB2", "Early RB1/QB2",
+  "PC8", "Anchor WR1/QB1 then reaches", "Reach on WR1/QB1 and values on depth") %>% 
   pivot_longer(c(-'component'),names_to = "effect_direction",values_to = "effect_description")
+
 
 write_parquet(pca_descriptions,"data/pca_descriptions.pdata")
 
@@ -317,7 +318,7 @@ pca_sims <- pca_dist %>%
 # Clustering
 via k-means
 
-```{r eval = FALSE}
+```{r eval = TRUE}
 
 df_kmeans <- pca_juice %>%
   select(-division_name,-franchise_name) %>%
@@ -331,8 +332,9 @@ df_kmeans <- pca_juice %>%
 clusters <- df_kmeans %>%
   unnest(cols = c(tidied))
 
-assignments <- df_kmeans %>%
+assignments <- df_kmeans %>% 
   unnest(cols = c(augmented))
+  
 
 clusterings <- df_kmeans %>%
   unnest(cols = c(glanced))
@@ -358,4 +360,71 @@ ggplot(clusterings, aes(k, tot.withinss)) +
 
 6 clusters seem to be the point of diminishing returns!
 
+# RESULTS ANALYSIS
 
+```{r}
+
+df_kmeans_8 <- pca_juice %>% 
+  select(-division_name,-franchise_name) %>%
+  nest(data = everything()) %>%
+  mutate(
+    k = 8,
+    kclust = map2(data,k,kmeans),
+    tidied = map(kclust,tidy),
+    glanced = map(kclust,glance),
+    augmented = map2(kclust,data,augment))
+
+df_clusterings <- df_kmeans_8 %>% 
+  unnest(tidied)
+
+df_assignments <- df_kmeans_8['augmented'] %>% 
+  unnest(1) %>% 
+  bind_cols(
+    pca_juice %>% select(division_name,franchise_name),
+    .
+  )
+
+standings <- map_dfr(sfb_leagues$conn,ff_standings)%>% 
+  mutate(franchise_name = str_remove(franchise_name,"<[^>]*>"),
+         franchise_name = stri_trans_general(franchise_name,"latin-ascii"))
+
+results <- df_assignments %>% 
+  left_join(standings, by = "franchise_name") %>% 
+  select(ends_with('name'),cluster = .cluster,starts_with("PC"),starts_with('h2h'),starts_with('allplay'),points_for,potential_points)
+
+cluster_descriptions <- df_clusterings %>% 
+  select(cluster = .cluster,starts_with("PC")) %>% 
+  pivot_longer(-cluster,names_to = "component") %>% 
+  mutate(effect_strength = case_when(abs(value) > 2 ~ "Very strong",
+                                     abs(value) > 1 ~ "Strong",
+                                     abs(value) > 0.5 ~ "Moderate",
+                                     TRUE ~ "Weak"),
+         effect_strength = suppressWarnings(fct_relevel(effect_strength,
+                                                        c("Very strong","Strong","Moderate","Weak"))),
+         effect_direction = ifelse(value > 0, "Positive","Negative")) %>% 
+  arrange(cluster,desc(abs(value))) %>%
+  left_join(pca_descriptions, by = c("component","effect_direction")) %>%
+  filter(!is.na(effect_description)) %>% 
+  filter(effect_strength!="Weak") %>% 
+  group_by(cluster,effect_strength) %>% 
+  summarise(effect_description = paste(effect_description,collapse = ", ")) %>% 
+  summarise(effect_description = paste(effect_strength, effect_description, sep = ": ", collapse = "; "))
+
+results_summary <- results %>% 
+  group_by(cluster) %>% 
+  summarise(
+    franchise_count = n(),
+    # across(starts_with("PC"), mean),
+    across(contains('points'), mean),
+    across(contains("wins"), mean)
+  ) %>% 
+  ungroup() %>% 
+  left_join(
+    y = .,
+    x = cluster_descriptions, 
+    by = "cluster") %>% 
+  arrange(desc(points_for))
+  
+
+
+```
