@@ -15,7 +15,7 @@ doParallel::registerDoParallel()
 
 setwd(here())
 
-load(file = "models/new_models.rda")
+load(file = "new_models.rda")
 rosters <- read_parquet("data/rosters/rosters_1999_2019.pdata")
 pbp <- read_parquet("data/pbp_data/pbp_reg_post_1999_2019.pdata")
 

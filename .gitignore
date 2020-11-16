@@ -37,3 +37,6 @@ vignettes/*.pdf
 
 # R Environment Variables
 .Renviron
+
+# private data
+/yards_created_clusters/yards_created_data.csv
