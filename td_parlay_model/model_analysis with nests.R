@@ -35,6 +35,29 @@ con <- DBI::dbConnect(odbc::odbc(), "dynastyprocess")
 
 ep <- dbGetQuery(con, "SELECT * FROM dp_expectedpoints WHERE Pos in ('QB','RB','WR','TE')")
 
+ecr_archive_pos <- dbGetQuery(con, "SELECT week, year, sportsdata_id, page_pos as pos, ecr as ecr_ovr from fp_ecr_archive
+                                where page_type in ('weekly-qb','weekly-rb','weekly-wr','weekly-te') and sportsdata_id is not null")
+
+ecr_archive_ovr <- dbGetQuery(con, "SELECT week, year, sportsdata_id, pos, ecr as ecr_pos from fp_ecr_archive
+                                where page_type = 'weekly-op' and sportsdata_id is not null")
+
+ecr <- dbGetQuery(con, "SELECT * from fp_ecr where page_type in ('weekly-offense','weekly-qb','weekly-rb','weekly-wr','weekly-te')")
+
+# palyerid <- dbGetQuery(con, "select * from dp_playerids")
+# ecr_sum <- ecr %>%
+#   group_by(fp_page, page_type, ecr_type) %>%
+#   summarise(n(),
+#             min(scrape_date),
+#             max(scrape_date))
+# 
+# ecr_sum <- ecr_archive %>%
+#   group_by(page_type, ecr_type) %>%
+#   summarise(n())
+# 
+# ecr_archive_sum <- ecr_archive_ovr %>%
+#   group_by(week, year, sportsdata_id, page_pos) %>%
+#   summarise(n())
+
 pbp <- dbGetQuery(con, "SELECT distinct game_id, posteam, posteam_type, total_line,
                                case when posteam_type = 'away' then spread_line else -spread_line end as 'spread_line'
                         FROM nflfastr_pbp where posteam is not null and posteam <> ''") %>% 
@@ -88,7 +111,7 @@ get_rate <- function(x,y){
 
 
 # Rolling averages --------------------------------------------------------
-ep_lagged_lines <- ep %>% 
+ep_lagged_lines <- ep %>%
   #filter(Name == "Christian Kirk") %>% 
   filter(Season >= 2004) %>% 
   inner_join(pbp, by = c("gsis_game_id" = "game_id", "Team" = "posteam")) %>% 
@@ -181,98 +204,263 @@ ep_lagged_lines <- ep %>%
          across(.cols = contains("roll1"),
                 .fn =  ~ifelse(is.nan(.x) | is.infinite(.x) | is.na(.x), 0, .x))) %>% 
   ungroup() %>% 
-  mutate(across(where(is.numeric), round, 2)) %>%
+  left_join(ecr_archive_ovr, by = c("Season" = "year", "Week" = "week", "sportradar_id" = "sportsdata_id", "Pos" = "pos")) %>% 
+  left_join(ecr_archive_pos, by = c("Season" = "year", "Week" = "week", "sportradar_id" = "sportsdata_id", "Pos" = "pos")) %>%
+  arrange(gsis_id, gsis_game_id) %>%
+  group_by(gsis_id, Pos) %>%
+  mutate(across(.cols = c(ecr_pos, ecr_ovr),
+                .fns = ~lead(as.numeric(.x)),
+                .names = "{.col}_next"),
+         across(where(is.numeric), round, 2)) %>%
   select(Season, Week, week_season, Team, gsis_game_id, Name, Pos, gsis_id, player_age, game_number,
-         posteam_type_next, spread_line_next, total_line_next, parlay_td_next, implied_total_next, where(is.numeric), #contains("roll"),
+         posteam_type_next, spread_line_next, total_line_next, parlay_td_next, implied_total_next, where(is.numeric),
          -contains("Season_"), -contains("Week_"), -contains("week_season_num_"), -contains("player_age_"),
          -contains("game_number_"), -contains("next_roll"))
 
 write_arrow(ep_lagged_lines, "model_roll.pdata")
 ep_lagged_lines <- read_arrow("model_roll.pdata")
 
-# Modeling ----------------------------------------------------------------
-set.seed(1234)
-memory.limit(size=50000)
+# Model functions ---------------------------------------------------------
+get_split <- function(df){
+  initial_split(df, prop = 4/5, strata = Season)
+}
 
-ep_model_data <- ep_lagged_lines %>% 
-  filter(Season >= 2006, Season < 2020, !is.na(parlay_td_next), Pos == "WR") %>% 
-  select(-c(Week, Team, gsis_game_id, Name, gsis_id, Pos))
+get_split_data <- function(df, split_type){
+  if (split_type == "train")
+  {training(df)}
+  else {testing(df)}
+}
 
-df_split <- initial_split(ep_model_data, prop = 4/5, strata = Season)
+get_fit <- function(df){
+  fit(earth_workflow, data=df)
+}
 
-df_train <- training(df_split)
-folds <- vfold_cv(df_train, 4)
-df_test <- testing(df_split)
+add_pred <- function(df, mod){
+  df %>%
+    bind_cols(predict(mod, ., type = "prob")) %>%
+    rename(parlay_td_next_pred = .pred_1)
+}
 
-# new_DF <- ep_model_data[rowSums(is.na(ep_model_data)) > 0,]
+get_metrics <- function(df){
+  df %>% 
+    metrics(parlay_td_next, parlay_td_next_pred)
+}
 
-earth_spec <- multinom_reg(
+get_ecr_predictions <- function(df, pos){
+  earth_spec <- mars(prod_degree = 2, prune_method = "exhaustive") %>%
+    set_engine("earth") %>%
+    set_mode("regression")
+  
+  #ecr_ovr
+  ecr_ovr_df <- df %>% 
+    select(-c(ecr_pos_next, parlay_td_next)) %>% 
+    filter(!is.na(ecr_ovr_next))
+  
+  ecr_ovr_fit <- earth_spec %>% 
+    fit(ecr_ovr_next ~ ., data = ecr_ovr_df)
+  
+  print(
+    pull_workflow_fit(ecr_ovr_fit) %>%
+      vip(geom = "point", num_features = 15) +
+      ggtitle(glue("Variable Importance for MARS ",pos," ECR Model")) +
+      geom_point(size = 2) +
+      theme_minimal()
+  )
+  
+  #ecr_pos
+  ecr_pos_df <- df %>% 
+    select(-c(ecr_ovr_next, parlay_td_next)) %>% 
+    filter(!is.na(ecr_pos_next))
+  
+  ecr_pos_fit <- earth_spec %>% 
+    fit(ecr_pos_next ~ ., data = ecr_pos_df)
+  
+  df %>%
+    bind_cols(predict(ecr_ovr_fit, .)) %>% 
+    rename(ecr_ovr_next_pred=.pred) %>% 
+    bind_cols(predict(ecr_pos_fit, .)) %>% 
+    rename(ecr_pos_next_pred=.pred)
+}
+
+
+# Tidymodels --------------------------------------------------------------
+xgb_rec <- recipe(parlay_td_next ~  ., data=df_train) %>% 
+  step_knnimpute(all_predictors(),
+                 neighbors = 25)
+
+prep_rec <- prep(xgb_rec)
+
+xgb_spec <- multinom_reg(
   penalty = tune(),
-  mixture = tune()) %>%
-  set_mode("classification") %>%
-  set_engine("glmnet")
+  mixture = tune()
+) %>% 
+  set_engine("glmnet") %>% 
+  set_mode("classification")
 
-earth_grid <- grid_regular(
-  num_terms(range = c(6,20)),
-  levels = 5
+xgb_workflow <- workflow() %>%
+  add_model(xgb_spec) %>%
+  add_recipe(xgb_rec)
+
+
+xgb_grid <- expand_grid(
+  mixture = seq(0.2,0.7,0.05),
+  #penalty = seq(0.0,0.01,0.002)
+  penalty = 0
 )
 
-earth_tune <- earth_workflow %>%
-  tune_grid(resamples = folds,
-            grid = earth_grid)
-
-earth_tune %>%
-  collect_metrics %>%
-  filter(.metric == "roc_auc") %>%
-  ggplot(aes(num_terms, mean))+
-  geom_point()
-
-# rec_wf <- rec_wf %>%
-#   finalize_workflow(tibble(num_terms = 14))
-
-# earth_spec <- mars(
-#   num_terms = 15,
-#   prod_degree = 2,
-#   prune_method = "exhaustive") %>%
-#   set_mode("classification") %>%
-#   set_engine("earth")
+xgb_res <- tune_grid(
+  xgb_workflow,
+  resamples = folds,
+  grid = xgb_grid,
+  metrics = metric_set(recall, precision),
+  control = control_grid(save_pred = TRUE)
+)
 
 earth_workflow <- workflow() %>%
   add_model(earth_spec) %>%
   add_formula(as.factor(parlay_td_next) ~  .)
 
+# Model data ----------------------------------------------------------------
+library(furrr)
+
+set.seed(1234)
+memory.limit(size=50000)
+
+ep_model_data <- ep_lagged_lines %>% 
+  filter(Season >= 2006, Season < 2020, !is.na(parlay_td_next), Pos == "RB") %>% 
+  select(-c(Week, Team, gsis_game_id, Name, gsis_id, Pos)) %>% 
+  mutate(parlay_td_next = as.factor(parlay_td_next))
+
+df_split <- initial_split(ep_model_data, prop = 4/5, strata = Season)
+
+df_train <- training(df_split)
+folds <- vfold_cv(df_train, 4, strata = Season)
+df_test <- testing(df_split)
+
+ep_model_data <- ep_lagged_lines %>%
+  select(-c(Week, Team, gsis_game_id, Name, gsis_id)) %>%
+  filter(Season >= 2006, Season < 2020, !is.na(parlay_td_next)) %>%
+  group_by(Pos) %>% 
+  nest() %>% 
+  mutate(df_split = map(data, ~get_split(.x)),
+         df_train = map(df_split, ~get_split_data(.x, "train")),
+         df_test = map(df_split, ~get_split_data(.x, "test")),
+         df_train_ecr = map2(df_train, Pos, ~get_ecr_predictions(.x, .y))
+         
+         model_fit = map(df_train, ~parsnip::fit(.env$earth_workflow, data=.x), .progress = TRUE),
+         df_test_predict = map2(df_test, model_fit, add_pred),
+         df_test_metrics = map(df_test_predict, get_metrics))
 
 
-earth_fit <- fit(earth_workflow, data = df_train)
+# Metrics -----------------------------------------------------------------
 
-pull_workflow_fit(earth_fit) %>%
-  vip(geom = "point", num_features = 10) +
-  ggtitle("Variable Importance for MARS RB TD Model") +
-  geom_point(size = 2) +
+best1 <- show_best(xgb_res, "recall")
+best2 <- show_best(xgb_res, "precision")
+
+xgb_res %>%
+  collect_metrics
+
+xgb_res %>%
+  collect_metrics %>% 
+  #filter(mixture == 0.5) %>% 
+  select(mixture, .metric, mean) %>% 
+  ggplot(aes(mixture, mean, color = .metric)) +
+  geom_point(alpha = 0.8, size = 2) +
+  theme_minimal() +
+  facet_wrap(~.metric, scales = "free_y")
+
+
+xgb_res %>%
+  collect_metrics() %>%
+  filter(.metric == "precision") %>%
+  select(mean, penalty:mixture) %>%
+  pivot_longer(penalty:mixture,
+               values_to = "value",
+               names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(alpha = 0.8, show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "precision")
+
+best_auc <- select_best(xgb_res, "precision")
+
+final_xgb <- finalize_workflow(
+  xgb_workflow,
+  best_auc
+)
+
+final_xgb %>%
+  fit(data = df_train) %>%
+  pull_workflow_fit() %>%
+  vip(geom = "point")
+
+final_res <- last_fit(final_xgb, df_split)
+
+collect_metrics(final_res)
+
+
+df_train_fit <- fit(final_xgb, data = df_train)
+
+df_train %>%
+  bind_cols(predict(df_train_fit, df_train)) %>% 
+  yardstick::precision(as.factor(parlay_td_next), .pred_class)
+
+df_test %>%
+  bind_cols(predict(df_train_fit, df_test)) %>% 
+  yardstick::precision(as.factor(parlay_td_next), .pred_class)
+
+temp2 <- df_test %>%
+  bind_cols(predict(df_train_fit, df_test, type = "prob"))  %>% 
+  mutate(across(where(is.numeric), round, 2)) %>%
+  arrange(-.pred_1) %>% 
+  select(.pred_1, .pred_0, parlay_td_next,
+         implied_total_next, total_fp_x_roll2, rush_fp_roll16, rush_fp_roll8,
+         rush_td_team_x_roll16, pass_att_team_roll16, rush_yd_team_x, total_yd_x, rush_yd_x_roll1)
+
+gain_curve(temp2, as.factor(parlay_td_next), .pred_1) %>% autoplot()
+lift_curve(temp2, as.factor(parlay_td_next), .pred_0) %>% autoplot()
+
+# df_test %>%
+#   bind_cols(predict(df_train_fit, df_test, type = "prob")) %>%
+#   mutate(tdpred = ifelse(.pred_1>=0.5,1,0)) %>% 
+#   conf_mat(as.factor(parlay_td_next), as.factor(tdpred)) %>% autoplot()
+
+pr_curve(temp2, as.factor(parlay_td_next), .pred_0) %>% 
+  ggplot(aes(x=.threshold)) +
+  geom_point(aes(y=precision), color = "red") +
+  geom_point(aes(y=recall), color = "black") +
   theme_minimal()
 
-earth_fit_summ <- earth_fit$fit$fit$fit
-# earth_fit_summ <- earth_fit$fit$fit$fit$model_df$model[[1]]$fit
-summary(earth_fit_summ)
-plot(earth_fit_summ)
+temp %>% 
+  ggplot(aes(x=.threshold)) +
+  geom_point(aes(y=specificity)) +
+  geom_point(aes(y=sensitivity, color = "red"))
 
-earth_fit_pred <- earth_fit$pre$mold$predictors
+temp <- final_res %>%
+  collect_predictions() %>%
+  roc_curve(`as.factor(parlay_td_next)`, .pred_0) %>%
+  ggplot(aes(x = 1 - specificity, y = sensitivity)) +
+  geom_line(size = 1.5, color = "midnightblue") +
+  geom_abline(
+    lty = 2, alpha = 0.5,
+    color = "gray50",
+    size = 1.2
+  )
 
-pdp::partial(earth_fit_summ, pred.var = c("total_yd_x_roll2"), train = earth_fit_pred) %>% autoplot()
-pdp::partial(earth_fit_summ, pred.var = c("total_yd_x_roll2", "implied_total_next"), train = earth_fit_pred) %>%
-  autoplot() +
-  theme_minimal() +
-  labs(title = "")
+temp2 %>% 
+  mutate(tdpred = ifelse(.pred_1>=0.5,1,0)) %>% 
+  group_by(tdpred) %>% 
+  summarise(mean(.pred_1),
+            mean(parlay_td_next),
+            sum(parlay_td_next),
+            n())
 
-test_rs <- df_train %>%
-  bind_cols(predict(earth_fit, df_train, type = "prob")) %>%
-  rename(parlay_td_next_pred = .pred_1)
-
-test_rs %>% 
-  ggplot(aes(x=parlay_td_next_pred)) +
+temp2 %>% 
+  ggplot(aes(x=.pred_1)) +
   geom_histogram()
 
-test_rs %>% 
+temp2 %>% 
   ggplot(aes(x=implied_total_next, y=pass_att_team_roll16, z = parlay_td_next_pred)) +
   stat_summary_hex() + 
   scale_color_gradient2(palette = "Greens") +
@@ -287,8 +475,8 @@ test_rs %>%
 # Predict 2020 data -------------------------------------------------------
 
 parlay_predictions_2020 <- ep_lagged_lines %>%
-  filter(Pos == "WR", Season == 2020, Week < 10) %>% 
-  bind_cols(predict(earth_fit, new_data =  ., type = "prob")) %>%
+  filter(Pos == "RB", Season == 2020, Week < 10) %>% 
+  bind_cols(predict(df_train_fit, new_data =  ., type = "prob")) %>%
   rename(parlay_td_next_pred = .pred_1) %>% 
   group_by(gsis_id) %>% 
   filter(Week == max(Week)) %>% 
@@ -302,4 +490,5 @@ parlay_predictions_2020 <- ep_lagged_lines %>%
   inner_join(games_combined, by = c("gsis_game_id" = "game_id")) %>% 
   filter(Pos == "RB") %>% 
   select(-c(Week, Team, gsis_game_id, Name, gsis_id, Pos))
+
 
