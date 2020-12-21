@@ -404,7 +404,7 @@ results <- df_assignments %>%
 
 
 cluster_descriptions <- df_clusterings %>% 
-  select(cluster = .cluster,starts_with("PC")) %>% 
+  select(cluster, starts_with("PC")) %>% 
   pivot_longer(-cluster,names_to = "component") %>% 
   mutate(effect_strength = case_when(abs(value) > 2 ~ "Very strong",
                                      abs(value) > 1 ~ "Strong",
