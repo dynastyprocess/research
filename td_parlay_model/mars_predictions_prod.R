@@ -29,7 +29,7 @@ suppressPackageStartupMessages({
 setwd(here::here())
 
 con <- DBI::dbConnect(odbc::odbc(), "dynastyprocess")
-dk <- dbGetQuery(con, "Select * from dk_playerprops_td where week = 14")
+dk <- dbGetQuery(con, "Select * from dk_playerprops_td where week = 16")
 
 # ecr_pos <- dbGetQuery(con, "SELECT sportsdata_id as sportradar_id, ecr as ecr_pos_pred_next, scrape_date
 #                             from fp_ecr
@@ -74,10 +74,9 @@ games_combined <-
                           posteam == "SL" ~ "LAR",
                           
                           TRUE ~ posteam),
-         spread_line_next = lead(spread_line),
-         total_line_next = lead(total_line),
-         implied_total_next = lead(implied_total),
-         posteam_type_next = lead(posteam_type),
+         across(.cols = c(posteam_type, spread_line, total_line, implied_total),
+                .fns = ~lead(.x),
+                .names = "{.col}_next"),
          last_gameday = max(if_else(!is.na(result),gameday,as_date('1990-1-1')))) %>% 
   ungroup() %>% 
   filter(gameday == last_gameday, season == year(today())) %>% 
@@ -96,30 +95,29 @@ games_combined <-
 ep_lagged_lines <- read_arrow("model_roll.pdata")
 load("parlay_pred_models.rda")
 
-#Check Last Week
-# parlay_predictions_prevweek <- ep_lagged_lines %>%
-#   filter(Pos == "WR", Season == 2020, Week < 11) %>% 
-#   left_join(ecr_pos, by = c("sportradar_id")) %>% 
-#   left_join(ecr_ovr, by = c("sportradar_id")) %>% 
-# 
-#   bind_cols(predict(wr_td_pred, new_data =  .)) %>%
-#   group_by(gsis_id) %>% 
-#   filter(Week == max(Week)) %>% 
-#   ungroup() %>% 
-#   mutate(across(where(is.numeric), round, 3)) %>% 
-#   select(Name, Team, Pos, ecr_pos_pred_next, .pred, parlay_td_next)
-#   
-
-
 #Predict Next Week
+ecr_pos <- ecr %>%
+  select(sportradar_id = sportsdata_id, ecr_pos_pred_next = ecr, scrape_date, page_type) %>% 
+  filter(page_type %in% c('weekly-qb','weekly-rb','weekly-wr','weekly-te')) %>%
+  filter(scrape_date == max(scrape_date)) %>% 
+  select(-scrape_date, -page_type)
+
+ecr_ovr <- ecr %>%
+  select(sportradar_id = sportsdata_id, ecr_ovr_pred_next = ecr, scrape_date, page_type) %>% 
+  filter(page_type %in% c('weekly-op')) %>%
+  filter(scrape_date == max(scrape_date)) %>% 
+  select(-scrape_date, -page_type)
+
+
 prep_2020 <- ep_lagged_lines %>%
   group_by(gsis_id) %>% 
   filter(sum(Season == 2020) > 0, gsis_game_id == max(gsis_game_id)) %>%
   ungroup() %>% 
-  select(-c(spread_line_next, posteam_type_next, implied_total_next, total_line_next, parlay_td_next, ecr_ovr, ecr_pos)) %>% 
+  select(-c(spread_line_next, posteam_type_next, implied_total_next,
+            total_line_next, parlay_td_next, ecr_ovr, ecr_pos)) %>% 
   left_join(games_combined, by = c("Team" = "Team")) %>% 
   left_join(ecr_pos, by = c("sportradar_id")) %>% 
-  left_join(ecr_ovr, by = c("sportradar_id")) %>% 
+  left_join(ecr_ovr, by = c("sportradar_id")) %>%
   filter(!is.na(ecr_ovr_pred_next),!is.na(ecr_pos_pred_next),!is.na(total_line_next))
 
 insert_mergename <- . %>%
@@ -177,12 +175,22 @@ bet_today <- dk %>%
 error_check <- bet_today %>% 
   filter(is.na(.pred))
 
+bet_filter <- bet_today %>%
+  filter(diff <= -0.03, ecr_ovr_pred_next <= 200)
+
+
+bet_filter <- bet_today %>%
+  filter(diff <= -0.05, ecr_ovr_pred_next <= 250)
+
+dk_dfs <- bet_today %>%
+  filter((Team %in% c("BUF","NE","GB","TEN")))
+
 #Bet Slate
 bet_today %>% 
   #filter(Team %in% c("SEA","PHI")) %>% 
-  # filter(Pos == "WR") %>%
-  #filter(.pred >= 0.2) %>%
-  filter(.pred >= 0.2, .pred >= implied_odds_any_td) %>% 
+  #filter(Pos == "WR") %>%
+  filter(.pred >= 0.2) %>%
+  #filter(.pred >= 0.2, .pred >= implied_odds_any_td) %>% 
   ggplot(aes(x=.pred, y=implied_odds_any_td, label = name), color = Pos) +
   geom_point() +
   geom_label_repel() + 
@@ -193,7 +201,9 @@ bet_today %>%
 #Bet Game
 bet_today %>% 
   #filter(Pos == "TE") %>%
-  filter(Team %in% c("HOU")) %>% 
+  #filter(Team == "HOU") %>% 
+  #filter(Team %in% c("SF","ARI","MIA","LV")) %>%
+  filter(Team %in% c("NE","BUF","GB","TEN")) %>% 
   ggplot(aes(x=.pred, y=implied_odds_any_td, label = name), color = Pos) +
   geom_point() +
   geom_label_repel() + 
@@ -204,31 +214,48 @@ bet_today %>%
 
 #Bet First
 bet_today %>%
-  mutate(implied_odds_first_td = if_else(name == "Stefon Diggs", 0.083, implied_odds_first_td)) %>% 
-  filter(Team %in% c("BUF","PIT")) %>% 
+  mutate(implied_odds_first_td = if_else(name == "Davante Adams", 0.0909, implied_odds_first_td)) %>% 
+  filter(Team %in% c("NE","BUF")) %>% 
+  #filter((.pred >= 0.2 & .pred >= implied_odds_any_td) | name == "Davante Adams")  %>% 
+ # filter(.pred >= 0.2, .pred >= implied_odds_any_td) %>% 
   ggplot(aes(x=implied_odds_first_td, y= (.pred * 0.234195) - 0.003587, label = name), color = Pos) +
   geom_point() +
   geom_label_repel() + 
   geom_smooth(color = "red", se = FALSE, method = "lm") +
-  labs(x = "First TD", y = "Any TD") +
+  labs(x = "DK Odds 1st TD", y = "Model Adjust 1st TD") +
   geom_abline() +
   theme_minimal() 
 
-#Check Ranks
-parlay_predictions_2020 %>% 
-  filter(Pos == "RB", .pred >= 0.1) %>% 
-  ggplot(aes(x=ecr_ovr_pred_next, y=.pred, label = Name), color = Pos) +
+#roster check
+
+roster <- parlay_predictions_2020 %>% filter(Name %in% c("Jeffery Wilson", "D.J. Moore", "J.K. Dobbins"))
+
+roster <- parlay_predictions_2020 %>% filter(Name %in% c('Russell Gage',"Malcolm Brown","Samaje Perine","Jeremy McNichols","Dion Lewis","Collin Johnson","James Washington","Demarcus Robinson","Gerald Everett", "Jimmy Graham", "Irv Smith"))
+
+roster <- parlay_predictions_2020 %>% filter(Name %in% c("Lynn Bowden","Darnell Mooney","Jared Cook","Noah Fant"))
+
+roster <- parlay_predictions_2020 %>% filter(Name %in% c("Corey Davis","Dallas Goedert","JuJu Smith-Schuster","Chris Godwin","Jeffery Wilson"))
+
+bet_today %>% 
+  #filter(Team %in% c("SEA","PHI")) %>% 
+  #filter(Pos == "WR") %>%
+  filter(.pred >= 0.25) %>%
+  #filter(.pred >= 0.2, .pred >= implied_odds_any_td) %>% 
+  ggplot(aes(x=ecr_ovr_pred_next, y=implied_odds_any_td, label = name), color = Pos) +
   geom_point() +
   geom_label_repel() + 
   geom_smooth(color = "red", se = FALSE, method = "lm") +
-  #geom_abline() +
-  theme_minimal() 
+  theme_minimal()
 
-#roster check
-roster <- parlay_predictions_2020 %>% filter(Name %in% c('Russell Gage',"Malcolm Brown","Samaje Perine","Jeremy McNichols","Dion Lewis","Collin Johnson","James Washington","Demarcus Robinson","Gerald Everett", "Jimmy Graham", "Irv Smith"))
 
-roster <- parlay_predictions_2020 %>% filter(Name %in% c("Adrian Peterson","Peyton Barber","Michael Gallup","Frank Gore","Wayne Gallman","Ito Smith","Zack Moss","Jeffery Wilson","Benny Snell","Zach Ertz","Tyler Eifert"))
+# Exploring PCAs ----------------------------------------------------------
+te_bake <- bake(pull_workflow_prepped_recipe(te_td_pred),
+                new_data =  prep_2020 %>% filter(Pos == "TE"))
 
-roster <- parlay_predictions_2020 %>% filter(Name %in% c("Curtis Samuel","Devontae Booker","Duke Johnson","Chase Edmonds","Zack Moss","Gabriel Davis","Henry Ruggs","Jalen Reagor"))
+te_bake %>%
+  ggplot(aes(PC01, PC02)) +
+  geom_point()
+  geom_text(check_overlap = TRUE, family = "IBMPlexSans")
 
-roster <- parlay_predictions_2020 %>% filter(Name %in% c("Corey Davis","Dallas Goedert","JuJu Smith-Schuster","Antonio Brown","Curtis Samuel","James Conner","Giovani Bernard","Nyheim Hines"))
+te_prep <- prep(pull_workflow_prepped_recipe(te_td_pred), retain = TRUE)
+te_pca <- tidy(,2)
