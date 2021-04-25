@@ -55,31 +55,33 @@ dk_odds <-
          implied_odds_last_td = 1/decimal_odds_last_td, 
          across(where(is.numeric), round, 4),
          scrape_date = Sys.Date(),
-         week = 16,
+         week = 18,
          season = 2020) %>% 
   insert_mergename()
 
-old_dk <- dbGetQuery(aws_db, "Select * From dk_playerprops_td where week = 16") %>%
-  filter(!(name %in% c("CJ Prosise","Danny Amendola","Gerald Everett"))) %>% 
-  mutate(scrape_date = Sys.Date())
-
-combo_dk <- dk_odds %>%
-  bind_rows(old_dk) %>%
-  distinct()
-
-dup_ck <- combo_dk %>%
-  group_by(name) %>%
-  tally() %>%
-  filter(n >1)
+# old_dk <- dbGetQuery(aws_db, "Select * From dk_playerprops_td where week = 16") %>%
+#   filter(!(name %in% c("CJ Prosise","Danny Amendola","Gerald Everett"))) %>% 
+#   mutate(scrape_date = Sys.Date())
+# 
+# combo_dk <- dk_odds %>%
+#   bind_rows(old_dk) %>%
+#   distinct()
+# 
+# dup_ck <- combo_dk %>%
+#   group_by(name) %>%
+#   tally() %>%
+#   filter(n >1)
  
 aws_db <- dbConnect(odbc::odbc(),"dynastyprocess")
 # dbExecute(aws_db, "delete from dk_playerprops_td where week = 16")
+dbExecute(aws_db, "update dk_playerprops_td set week = 18 where scrape_date = '2021-01-09'")
+
 # temp <- dbGetQuery(aws_db, "select * from dk_playerprops_td") %>% 
 #   add_column(week = 11) %>% 
 #   add_column(season = 2020) %>% 
 #   rbind(dk_odds)
 # dbRemoveTable(aws_db, "dk_playerprops_td")
 # dbCreateTable(aws_db, "dk_playerprops_td", combo_dk)
-dbAppendTable(aws_db,"dk_playerprops_td", combo_dk)
+dbAppendTable(aws_db,"dk_playerprops_td", dk_odds)
 dbDisconnect(aws_db)
 

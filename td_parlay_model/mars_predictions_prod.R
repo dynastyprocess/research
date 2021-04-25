@@ -29,18 +29,18 @@ suppressPackageStartupMessages({
 setwd(here::here())
 
 con <- DBI::dbConnect(odbc::odbc(), "dynastyprocess")
-dk <- dbGetQuery(con, "Select * from dk_playerprops_td where week = 16")
+dk <- dbGetQuery(con, "Select * from dk_playerprops_td where week = 18")
 
-# ecr_pos <- dbGetQuery(con, "SELECT sportsdata_id as sportradar_id, ecr as ecr_pos_pred_next, scrape_date
-#                             from fp_ecr
-#                             where page_type in ('weekly-qb','weekly-rb','weekly-wr','weekly-te')") %>%
-#   filter(scrape_date == max(scrape_date)) %>%
-#   select(-scrape_date)
-# 
-# ecr_ovr <- dbGetQuery(con, "SELECT sportsdata_id as sportradar_id, ecr as ecr_ovr_pred_next, scrape_date
-#                             from fp_ecr where page_type in ('weekly-op')") %>%
-#   filter(scrape_date == max(scrape_date)) %>%
-#   select(-scrape_date)
+ecr_pos <- dbGetQuery(con, "SELECT sportsdata_id as sportradar_id, ecr as ecr_pos_pred_next, scrape_date
+                            from fp_ecr
+                            where page_type in ('weekly-qb','weekly-rb','weekly-wr','weekly-te')") %>%
+  filter(scrape_date == max(scrape_date)) %>%
+  select(-scrape_date)
+
+ecr_ovr <- dbGetQuery(con, "SELECT sportsdata_id as sportradar_id, ecr as ecr_ovr_pred_next, scrape_date
+                            from fp_ecr where page_type in ('weekly-op')") %>%
+  filter(scrape_date == max(scrape_date)) %>%
+  select(-scrape_date)
 
 dbDisconnect(con)
 rm(con)
@@ -79,7 +79,7 @@ games_combined <-
                 .names = "{.col}_next"),
          last_gameday = max(if_else(!is.na(result),gameday,as_date('1990-1-1')))) %>% 
   ungroup() %>% 
-  filter(gameday == last_gameday, season == year(today())) %>% 
+  filter(gameday == last_gameday, season == 2020) %>% 
   select(Team, spread_line_next, total_line_next, implied_total_next, posteam_type_next)
   # mutate(spread_line_next = case_when(Team == "DET" ~ -2,
   #                                     Team == "CAR" ~ 2,
@@ -96,17 +96,17 @@ ep_lagged_lines <- read_arrow("model_roll.pdata")
 load("parlay_pred_models.rda")
 
 #Predict Next Week
-ecr_pos <- ecr %>%
-  select(sportradar_id = sportsdata_id, ecr_pos_pred_next = ecr, scrape_date, page_type) %>% 
-  filter(page_type %in% c('weekly-qb','weekly-rb','weekly-wr','weekly-te')) %>%
-  filter(scrape_date == max(scrape_date)) %>% 
-  select(-scrape_date, -page_type)
-
-ecr_ovr <- ecr %>%
-  select(sportradar_id = sportsdata_id, ecr_ovr_pred_next = ecr, scrape_date, page_type) %>% 
-  filter(page_type %in% c('weekly-op')) %>%
-  filter(scrape_date == max(scrape_date)) %>% 
-  select(-scrape_date, -page_type)
+# ecr_pos <- ecr %>%
+#   select(sportradar_id = sportsdata_id, ecr_pos_pred_next = ecr, scrape_date, page_type) %>% 
+#   filter(page_type %in% c('weekly-qb','weekly-rb','weekly-wr','weekly-te')) %>%
+#   filter(scrape_date == max(scrape_date)) %>% 
+#   select(-scrape_date, -page_type)
+# 
+# ecr_ovr <- ecr %>%
+#   select(sportradar_id = sportsdata_id, ecr_ovr_pred_next = ecr, scrape_date, page_type) %>% 
+#   filter(page_type %in% c('weekly-op')) %>%
+#   filter(scrape_date == max(scrape_date)) %>% 
+#   select(-scrape_date, -page_type)
 
 
 prep_2020 <- ep_lagged_lines %>%
@@ -176,11 +176,11 @@ error_check <- bet_today %>%
   filter(is.na(.pred))
 
 bet_filter <- bet_today %>%
-  filter(diff <= -0.03, ecr_ovr_pred_next <= 200)
+  filter(diff <= -0.05, ecr_ovr_pred_next <= 250)
 
 
 bet_filter <- bet_today %>%
-  filter(diff <= -0.05, ecr_ovr_pred_next <= 250)
+  filter(diff <= 0.0, ecr_ovr_pred_next <= 50)
 
 dk_dfs <- bet_today %>%
   filter((Team %in% c("BUF","NE","GB","TEN")))
@@ -189,8 +189,8 @@ dk_dfs <- bet_today %>%
 bet_today %>% 
   #filter(Team %in% c("SEA","PHI")) %>% 
   #filter(Pos == "WR") %>%
-  filter(.pred >= 0.2) %>%
-  #filter(.pred >= 0.2, .pred >= implied_odds_any_td) %>% 
+  #filter(.pred >= 0.25) %>%
+  filter(.pred >= 0.2, .pred >= implied_odds_any_td) %>% 
   ggplot(aes(x=.pred, y=implied_odds_any_td, label = name), color = Pos) +
   geom_point() +
   geom_label_repel() + 
@@ -238,14 +238,23 @@ roster <- parlay_predictions_2020 %>% filter(Name %in% c("Corey Davis","Dallas G
 
 bet_today %>% 
   #filter(Team %in% c("SEA","PHI")) %>% 
-  #filter(Pos == "WR") %>%
-  filter(.pred >= 0.25) %>%
+  filter(Pos == "WR") %>%
+  #filter(.pred >= 0.25) %>%
   #filter(.pred >= 0.2, .pred >= implied_odds_any_td) %>% 
   ggplot(aes(x=ecr_ovr_pred_next, y=implied_odds_any_td, label = name), color = Pos) +
   geom_point() +
   geom_label_repel() + 
   geom_smooth(color = "red", se = FALSE, method = "lm") +
   theme_minimal()
+
+dk %>%
+  filter(implied_odds_any_td>=.2) %>% 
+  ggplot(aes(x=implied_odds_first_td, y=implied_odds_any_td, label = name)) +
+  geom_point() +
+  geom_label_repel() + 
+  geom_smooth(color = "red", se = FALSE, method = "lm") +
+  theme_minimal()
+
 
 
 # Exploring PCAs ----------------------------------------------------------
