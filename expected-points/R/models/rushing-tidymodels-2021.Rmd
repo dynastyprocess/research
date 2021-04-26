@@ -1,0 +1,45 @@
+---
+title: "Expected Points Rushing Models"
+author: "Joe Sydlowski"
+date: "4/25/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Libraries
+library(tidyverse)
+library(tidymodels)
+library(here)
+library(arrow)
+
+setwd(here())
+```
+
+## Load the Data
+
+```{r nflfastr}
+df_rushing <- 
+  arrow::open_dataset("~/Documents/DynastyProcess/db/data/nflfastr_pbp") %>% 
+  dplyr::collect()
+```
+
+## Functions
+
+```{r functions}
+get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
+  if(is.character(from_date)) from_date <- lubridate::as_date(from_date)
+  if(is.character(to_date))   to_date   <- lubridate::as_date(to_date)
+  if (dec) { age <- lubridate::interval(start = from_date, end = to_date)/(lubridate::days(365)+lubridate::hours(6))
+  } else   { age <- lubridate::year(lubridate::as.period(lubridate::interval(start = from_date, end = to_date)))}
+  round(age,2)
+}
+
+get_rate <- function(x,y){
+  rate <- sum(x, na.rm = TRUE) / sum(y, na.rm = TRUE)
+  
+  ifelse(is.nan(rate) | is.infinite(rate), 0, rate)
+}
+```
+

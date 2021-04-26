@@ -1,0 +1,39 @@
+---
+title: "PFR Injury Analysis"
+author: "Joe Sydlowski"
+date: "4/25/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(glue)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load the Data
+
+```{r data}
+
+scrape_page <- 
+  function(page){
+    read_csv(glue("https://raw.githubusercontent.com/jchernak96/NFL-Injury-Data-PFR-/master/Data/PFR_{page}_Injuries.csv"))
+  }
+
+injury_df <- 
+  tibble(year = 2012:2020) %>% 
+  mutate(year_df = map(year, scrape_page)) %>% 
+  unnest(year_df)
+  
+```
+
+## Analyze Data
+
+```{r eda}
+injury_df %>% 
+  group_by(Game_Designation, Started, Active_Inactive, Position, Injury_Type) %>% 
+  summarise(mean(Offense.Snap.Rate),
+            n()) %>% 
+  view()
+```
+

@@ -1,0 +1,176 @@
+---
+title: "Career-to-Date Stability"
+author: "Joe Sydlowski"
+date: "4/25/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Libraries
+library(tidyverse)
+library(tidymodels)
+library(nflfastR)
+library(slider)
+library(glue)
+library(here)
+library(arrow)
+
+setwd(here())
+
+future::plan("multisession")
+```
+
+## Functions
+
+```{r functions}
+scrape_page <- 
+  function(page){
+    read_csv(glue("https://raw.githubusercontent.com/jchernak96/NFL-Injury-Data-PFR-/master/Data/PFR_{page}_Injuries.csv"))
+  }
+
+wrapped_slider <- function(vec){
+
+  tibble(window_size = 1:5) %>%
+    mutate(roll = map(window_size, ~slide_dbl(vec, ~mean(.x, na.rm = TRUE), .before = .x, .after = -1)))
+}
+
+
+get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
+  if(is.character(from_date)) from_date <- lubridate::as_date(from_date)
+  if(is.character(to_date))   to_date   <- lubridate::as_date(to_date)
+  if (dec) { age <- lubridate::interval(start = from_date, end = to_date)/(lubridate::days(365)+lubridate::hours(6))
+  } else   { age <- lubridate::year(lubridate::as.period(lubridate::interval(start = from_date, end = to_date)))}
+  round(age,2)
+}
+
+get_rate <- function(x,y){
+  rate <- sum(x, na.rm = TRUE) / sum(y, na.rm = TRUE)
+  
+  ifelse(is.nan(rate) | is.infinite(rate), 0, rate)
+}
+
+```
+
+## Load the Data
+
+```{r nflfastr}
+nflfastr_rosters <-
+  nflfastR::fast_scraper_roster(1999:2020) %>%
+  select(season, gsis_id, position, full_name, birth_date, sportradar_id) %>% 
+  mutate(position = dplyr::if_else(position %in% c("HB","FB"), "RB", position))
+
+injury_df <- 
+  tibble(year = 2012:2020) %>% 
+  mutate(year_df = map(year, scrape_page)) %>% 
+  unnest(year_df) %>% 
+  select(name_pfr = Name,
+         team = team_abbr,
+         Position,
+         gsis_id,
+         season = Season,
+         week = Week,
+         Started,
+         Active_Inactive,
+         Game_Designation,
+         Injury_Type,
+         snaps = Offense.Snaps,
+         snap_rate = Offense.Snap.Rate)
+
+osdb_df <-
+  arrow::open_dataset("~/Documents/DynastyProcess/db/data/osdb/rushing") %>% 
+  dplyr::collect() %>% 
+  mutate(rushing_yac = rushing_attempts * rush_yards_before_contact_average,
+         rushing_ybc = rushing_attempts * yards_after_contact_per_rush,
+         rushing_attempts_stuffed = rushing_attempts * rushing_stuff_pct / 100) %>% 
+  select(player_id, season, week, rushing_yac, rushing_ybc, rushing_attempts_stuffed, broken_tackles)
+
+game_df <-
+  injury_df %>% 
+  full_join(nflfastR::load_player_stats(), by = c("gsis_id" = "player_id", "season", "week")) %>%
+  left_join(nflfastr_rosters, by = c("gsis_id", "season")) %>%
+  
+  #633 missing sportradar_ids
+  left_join(osdb_df, by = c("sportradar_id" = "player_id", "season", "week")) %>%
+  
+  mutate(player_name = if_else(is.na(name_pfr), full_name, name_pfr),
+         team = if_else(is.na(team), recent_team, team),
+         across(.cols = where(is.numeric) & !c(rushing_yac, rushing_ybc, rushing_attempts_stuffed, broken_tackles),
+                .fns = ~case_when(!is.na(.x) ~ as.numeric(.x),
+                                  snaps > 0 ~ 0,
+                                  TRUE ~ NA_real_)),
+         across(.cols = c(rushing_yac, rushing_ybc, rushing_attempts_stuffed, broken_tackles),
+                .fns = ~case_when(!is.na(.x) ~ as.numeric(.x),
+                                  snaps > 0 & season >= 2012 ~ 0,
+                                  TRUE ~ NA_real_))) %>%
+  select(-c(name_pfr, full_name, recent_team))
+
+#check missing snap data
+
+# injury_df %>% filter(is.na(week), Position %in% c("QB","WR","TE","RB")) %>% view()
+
+# game_df %>%
+#   inner_join(
+#     game_df %>% 
+#       filter(is.na(week), season >= 2012) %>%
+#       select(gsis_id, season) %>% distinct(),
+#     by = c("gsis_id","season")) %>% 
+#   group_by(player_name, season) %>% 
+#   summarise(sum(fantasy_points, na.rm = TRUE)) %>% view()
+
+# Eventually swap to DynastyProcess/db
+
+# nflfastr_rosters <-
+#   arrow::open_dataset("~/Documents/DynastyProcess/db/data/nflfastr_rosters") %>%
+#   dplyr::collect() %>%
+#   select(season, gsis_id, position, full_name, birth_date, sportradar_id) %>% 
+#   mutate(position = dplyr::if_else(position %in% c("HB","FB"), "RB", position))
+
+# nflfastr_week <- 
+#   arrow::open_dataset("~/Documents/DynastyProcess/db/data/nflfastr_week") %>%
+#   dplyr::collect() %>% 
+#   left_join(nflfastr_rosters, by = c("player_id" = "gsis_id", "season" = "season"))
+```
+
+## Calculate Careers To Date
+
+```{r nflfastr}
+
+#across
+rolling_df <- 
+  game_df %>%
+  arrange(player_id, season, week) %>%
+  group_by(player_id) %>% 
+  mutate(
+    across(.cols = where(is.numeric) & !contains("epa") & !contains("season"),
+           .fns = ~slide_dbl(.x, ~mean(.x, na.rm = TRUE), .before = Inf, .after = -1),
+           .names = "{.col}_career_to_date")
+  )
+ 
+#pivot longer 
+rolling_df <- 
+  game_df %>%
+  pivot_longer(cols = where(is.numeric) & !c(season, week),
+               names_to = "variable") %>% 
+  arrange(player_id, variable, season, week) %>%
+  group_by(player_id, variable) %>% 
+  mutate(career_to_date = slide_dbl(value, ~mean(.x, na.rm = TRUE), .before = Inf, .after = -1))
+   
+  
+#wrapped functions
+rolling_df <- 
+  game_df %>%
+  arrange(player_id, season, week) %>%
+  group_by(player_id) %>%
+  mutate(wrapped_carries = wrapped_slider(carries))
+  mutate(
+    across(.cols = c(carries), #where(is.numeric) & !contains("epa") & !c("season", "week"),
+           .fns = ~wrapped_slider(.x),
+           .names = "{.col}_career_to_date")
+  )
+
+
+```
+
+
