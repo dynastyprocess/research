@@ -1,0 +1,475 @@
+---
+title: "Career-to-Date Stability"
+author: "Joe Sydlowski"
+date: "4/25/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Libraries
+library(tidyverse)
+library(tidymodels)
+library(nflfastR)
+library(slider)
+library(glue)
+library(here)
+library(arrow)
+library(TTR)
+
+setwd(here())
+
+future::plan("multisession")
+```
+
+## Functions
+
+```{r functions}
+scrape_page <- 
+  function(page){
+    read_csv(glue("https://raw.githubusercontent.com/jchernak96/NFL-Injury-Data-PFR-/master/Data/PFR_{page}_Injuries.csv"))
+  }
+
+get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
+  if(is.character(from_date)) from_date <- lubridate::as_date(from_date)
+  if(is.character(to_date))   to_date   <- lubridate::as_date(to_date)
+  if (dec) { age <- lubridate::interval(start = from_date, end = to_date)/(lubridate::days(365)+lubridate::hours(6))
+  } else   { age <- lubridate::year(lubridate::as.period(lubridate::interval(start = from_date, end = to_date)))}
+  round(age,2)
+}
+
+get_rate <- function(x,y){
+  rate <- sum(x, na.rm = TRUE) / sum(y, na.rm = TRUE)
+  
+  ifelse(is.nan(rate) | is.infinite(rate), 0, rate)
+}
+
+clean_pre2006 <- function(year, value) {ifelse(year < 2006, NA, value)}
+
+```
+
+## Load the Data
+
+```{r nflfastr}
+nflfastr_rosters <-
+  nflfastR::fast_scraper_roster(1999:2020) %>%
+  select(season, gsis_id, position, full_name, birth_date, sportradar_id) %>% 
+  mutate(position = dplyr::if_else(position %in% c("HB","FB"), "RB", position))
+
+injury_df <- 
+  tibble(year = 2012:2020) %>% 
+  mutate(year_df = map(year, scrape_page)) %>% 
+  unnest(year_df) %>% 
+  select(name_pfr = Name,
+         team = team_abbr,
+         Position,
+         gsis_id,
+         season = Season,
+         week = Week,
+         Started,
+         Active_Inactive,
+         Game_Designation,
+         Injury_Type,
+         snaps = Offense.Snaps,
+         snap_rate = Offense.Snap.Rate)
+
+#Calculate team stats by game
+team_snaps <- 
+  injury_df %>%
+  group_by(team, season, week) %>% 
+  filter(snap_rate == max(snap_rate), !is.na(week), snaps != 0) %>%
+  ungroup() %>%
+  mutate(team_snaps = round(snaps / snap_rate,0)) %>% 
+  select(team, season, week, team_snaps) %>%
+  distinct()
+
+osdb_df <-
+  arrow::open_dataset("~/Documents/DynastyProcess/db/data/osdb/rushing") %>% 
+  dplyr::collect() %>% 
+  mutate(rushing_yac = rushing_attempts * rush_yards_before_contact_average,
+         rushing_ybc = rushing_attempts * yards_after_contact_per_rush,
+         rushing_attempts_stuffed = rushing_attempts * rushing_stuff_pct / 100) %>% 
+  select(player_id, season, week, rushing_yac, rushing_ybc, rushing_attempts_stuffed, broken_tackles)
+
+game_df <-
+  injury_df %>% 
+  left_join(team_snaps, by = c("team","season","week")) %>% 
+  full_join(nflfastR::load_player_stats(), by = c("gsis_id" = "player_id", "season", "week")) %>%
+  left_join(nflfastr_rosters, by = c("gsis_id", "season")) %>%
+  
+  #633 missing sportradar_ids
+  left_join(osdb_df, by = c("sportradar_id" = "player_id", "season", "week")) %>%
+  
+  mutate(player_name = if_else(is.na(name_pfr), full_name, name_pfr),
+         team = if_else(is.na(team), recent_team, team),
+         across(.cols = where(is.numeric) & !c(rushing_yac, rushing_ybc, rushing_attempts_stuffed, broken_tackles),
+                .fns = ~case_when(!is.na(.x) ~ as.numeric(.x),
+                                  snaps > 0 ~ 0,
+                                  TRUE ~ NA_real_)),
+         across(.cols = c(rushing_yac, rushing_ybc, rushing_attempts_stuffed, broken_tackles),
+                .fns = ~case_when(!is.na(.x) ~ as.numeric(.x),
+                                  snaps > 0 & season >= 2012 ~ 0,
+                                  TRUE ~ NA_real_))) %>%
+  select(-c(name_pfr, full_name, recent_team))
+
+#check missing snap data
+
+# injury_df %>% filter(is.na(week), Position %in% c("QB","WR","TE","RB")) %>% view()
+
+# game_df %>%
+#   inner_join(
+#     game_df %>% 
+#       filter(is.na(week), season >= 2012) %>%
+#       select(gsis_id, season) %>% distinct(),
+#     by = c("gsis_id","season")) %>% 
+#   group_by(player_name, season) %>% 
+#   summarise(sum(fantasy_points, na.rm = TRUE)) %>% view()
+
+# Eventually swap to DynastyProcess/db
+
+# nflfastr_rosters <-
+#   arrow::open_dataset("~/Documents/DynastyProcess/db/data/nflfastr_rosters") %>%
+#   dplyr::collect() %>%
+#   select(season, gsis_id, position, full_name, birth_date, sportradar_id) %>% 
+#   mutate(position = dplyr::if_else(position %in% c("HB","FB"), "RB", position))
+
+# nflfastr_week <- 
+#   arrow::open_dataset("~/Documents/DynastyProcess/db/data/nflfastr_week") %>%
+#   dplyr::collect() %>% 
+#   left_join(nflfastr_rosters, by = c("player_id" = "gsis_id", "season" = "season"))
+```
+
+## Calculate Careers To Date
+
+```{r nflfastr}
+
+#across
+rolling_df <- 
+  game_df %>%
+  # filter(player_name == "Chris Carson") %>% 
+  arrange(gsis_id, season, week) %>%
+  
+  #Calculate team totals by game
+  group_by(team, season, week) %>% 
+  mutate(
+    across(.cols = where(is.numeric) & !contains("epa") & !c("dakota") & !contains("snap"),
+           .fns = ~sum(.x, na.rm = TRUE),
+           .names = "{.col}_team")) %>%
+  ungroup() %>%
+  
+  #Calculate player career stats to date, no air yards before 2006
+  group_by(gsis_id) %>% 
+  mutate(
+    across(.cols = where(is.numeric) & !contains("epa") & !contains("team") & !c("season", "week", "dakota"),
+           .fns = ~slide_dbl(.x, ~mean(.x, na.rm = TRUE), .before = Inf, .after = -1),
+           .names = "{.col}_career_to_date"),
+    
+    snap_rate_career_to_date = 
+      slide2_dbl(snaps, 
+                 ifelse(is.na(fantasy_points), NA, team_snaps),
+                 ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    #Receiving
+    
+    rec_racr_career_to_date = 
+      slide2_dbl(clean_pre2006(season, receiving_yards), receiving_air_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_tar_share_career_to_date = 
+      slide2_dbl(targets,
+                 ifelse(is.na(targets), NA, attempts_team),
+                 ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_ay_share_career_to_date = 
+      slide2_dbl(receiving_air_yards,
+                 ifelse(is.na(receiving_air_yards), NA, passing_air_yards_team),
+                 ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_wopr_career_to_date = 
+      1.5*clean_pre2006(season, rec_tar_share_career_to_date) + 0.7*rec_ay_share_career_to_date,
+    
+    rec_ypt_career_to_date = 
+      slide2_dbl(receiving_yards, targets, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_comp_rate_career_to_date = 
+      slide2_dbl(receptions, targets, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_td_rate_career_to_date = 
+      slide2_dbl(receiving_tds, receptions, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_yptpa_career_to_date = 
+      slide2_dbl(receiving_yards,
+                 ifelse(is.na(receiving_yards), NA, attempts_team),
+                 ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_yac_rate_career_to_date = 
+      slide2_dbl(receiving_yards_after_catch, receiving_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_adot_career_to_date = 
+      slide2_dbl(clean_pre2006(season, receiving_air_yards), targets, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    #Rushing
+    
+    rush_ypc_career_to_date = 
+      slide2_dbl(rushing_yards, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_td_rate_career_to_date =
+      slide2_dbl(rushing_tds, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_stuff_rate_career_to_date =
+      slide2_dbl(rushing_attempts_stuffed, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_ybc_rate_career_to_date = 
+      slide2_dbl(rushing_ybc, rushing_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_yac_rate_career_to_date = 
+      slide2_dbl(rushing_yac, rushing_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    broken_tackle_rate_career_to_date = 
+      slide2_dbl(broken_tackles, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_team_ybc_rate_career_to_date = 
+      slide2_dbl(rushing_ybc_team, rushing_yards_team, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_team_yac_rate_career_to_date = 
+      slide2_dbl(rushing_yac_team, rushing_yards_team, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_team_stuff_rate_career_to_date = 
+      slide2_dbl(rushing_attempts_stuffed, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),   
+    
+    #Passing
+    
+    pass_pacr_career_to_date = 
+      slide2_dbl(clean_pre2006(season, passing_yards), passing_air_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    pass_comp_rate_career_to_date = 
+      slide2_dbl(completions, attempts, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    pass_td_rate_career_to_date = 
+      slide2_dbl(passing_tds, completions, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    pass_yac_rate_career_to_date = 
+      slide2_dbl(passing_yards_after_catch, clean_pre2006(season, passing_yards), ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    pass_adot_career_to_date =
+      slide2_dbl(clean_pre2006(season, passing_air_yards), attempts, ~get_rate(.x,.y), .before = Inf, .after = -1)) %>%
+  ungroup() %>% 
+  
+  #Calculate player season to date stats, no air yards before 2006
+  group_by(gsis_id, season) %>% 
+  mutate(
+    across(.cols = where(is.numeric) & !contains("epa") & !contains("team") & !contains("to_date") & !c("week", "dakota"),
+           .fns = ~slide_dbl(.x, ~mean(.x, na.rm = TRUE), .before = Inf, .after = -1),
+           .names = "{.col}_season_to_date"),
+    
+    snap_rate_season_to_date = 
+      slide2_dbl(snaps, 
+                 ifelse(is.na(fantasy_points), NA, team_snaps),
+                 ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    #Receiving
+    
+    rec_racr_season_to_date = 
+      slide2_dbl(receiving_yards, receiving_air_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_tar_share_season_to_date = 
+      slide2_dbl(targets,
+                 ifelse(is.na(targets), NA, attempts_team),
+                 ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_ay_share_season_to_date = 
+      slide2_dbl(receiving_air_yards,
+                 ifelse(is.na(receiving_air_yards), NA, passing_air_yards_team),
+                 ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_wopr_season_to_date = 
+      1.5*rec_tar_share_season_to_date + 0.7*rec_ay_share_season_to_date,
+    
+    rec_ypt_season_to_date = 
+      slide2_dbl(receiving_yards, targets, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_comp_rate_season_to_date = 
+      slide2_dbl(receptions, targets, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_td_rate_season_to_date = 
+      slide2_dbl(receiving_tds, receptions, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_yptpa_season_to_date = 
+      slide2_dbl(receiving_yards,
+                 ifelse(is.na(receiving_yards), NA, attempts_team),
+                 ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_yac_rate_season_to_date = 
+      slide2_dbl(receiving_yards_after_catch, receiving_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rec_adot_season_to_date = 
+      slide2_dbl(receiving_air_yards, targets, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    #Rushing
+    
+    rush_ypc_season_to_date = 
+      slide2_dbl(rushing_yards, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_td_rate_season_to_date =
+      slide2_dbl(rushing_tds, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_stuff_rate_season_to_date =
+      slide2_dbl(rushing_attempts_stuffed, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_ybc_rate_season_to_date = 
+      slide2_dbl(rushing_ybc, rushing_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_yac_rate_season_to_date = 
+      slide2_dbl(rushing_yac, rushing_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    broken_tackle_rate_season_to_date = 
+      slide2_dbl(broken_tackles, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_team_ybc_rate_season_to_date = 
+      slide2_dbl(rushing_ybc_team, rushing_yards_team, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_team_yac_rate_season_to_date = 
+      slide2_dbl(rushing_yac_team, rushing_yards_team, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    rush_team_stuff_rate_season_to_date = 
+      slide2_dbl(rushing_attempts_stuffed, carries, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    #Passing
+    
+    pass_pacr_season_to_date = 
+      slide2_dbl(passing_yards, passing_air_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    pass_comp_rate_season_to_date = 
+      slide2_dbl(completions, attempts, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    pass_td_rate_season_to_date = 
+      slide2_dbl(passing_tds, completions, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    pass_yac_rate_season_to_date = 
+      slide2_dbl(passing_yards_after_catch, passing_yards, ~get_rate(.x,.y), .before = Inf, .after = -1),
+    
+    pass_adot_season_to_date =
+      slide2_dbl(passing_air_yards, attempts, ~get_rate(.x,.y), .before = Inf, .after = -1)) %>%
+  ungroup() %>% 
+  
+  #Calculate player rolling 16 stats, no air yards before 2006
+  group_by(gsis_id) %>% 
+  mutate(
+    across(.cols = where(is.numeric) & !contains("epa") & !contains("team") & !contains("to_date") & !c("season", "week", "dakota"),
+           .fns = ~slide_dbl(.x, ~mean(.x, na.rm = TRUE), .before = 15, .after = -1),
+           .names = "{.col}_rolling16"),
+    
+    snap_rate_rolling16 = 
+      slide2_dbl(snaps, 
+                 ifelse(is.na(fantasy_points), NA, team_snaps),
+                 ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    #Receiving
+    
+    rec_racr_rolling16 = 
+      slide2_dbl(clean_pre2006(season, receiving_yards), receiving_air_yards, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rec_tar_share_rolling16 = 
+      slide2_dbl(targets,
+                 ifelse(is.na(targets), NA, attempts_team),
+                 ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rec_ay_share_rolling16 = 
+      slide2_dbl(receiving_air_yards,
+                 ifelse(is.na(receiving_air_yards), NA, passing_air_yards_team),
+                 ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rec_wopr_rolling16 = 
+      1.5*clean_pre2006(season, rec_tar_share_rolling16) + 0.7*rec_ay_share_rolling16,
+    
+    rec_ypt_rolling16 = 
+      slide2_dbl(receiving_yards, targets, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rec_comp_rate_rolling16 = 
+      slide2_dbl(receptions, targets, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rec_td_rate_rolling16 = 
+      slide2_dbl(receiving_tds, receptions, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rec_yptpa_rolling16 = 
+      slide2_dbl(receiving_yards,
+                 ifelse(is.na(receiving_yards), NA, attempts_team),
+                 ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rec_yac_rate_rolling16 = 
+      slide2_dbl(receiving_yards_after_catch, receiving_yards, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rec_adot_rolling16 = 
+      slide2_dbl(clean_pre2006(season, receiving_air_yards), targets, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    #Rushing
+    
+    rush_ypc_rolling16 = 
+      slide2_dbl(rushing_yards, carries, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rush_td_rate_rolling16 =
+      slide2_dbl(rushing_tds, carries, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rush_stuff_rate_rolling16 =
+      slide2_dbl(rushing_attempts_stuffed, carries, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rush_ybc_rate_rolling16 = 
+      slide2_dbl(rushing_ybc, rushing_yards, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rush_yac_rate_rolling16 = 
+      slide2_dbl(rushing_yac, rushing_yards, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    broken_tackle_rate_rolling16 = 
+      slide2_dbl(broken_tackles, carries, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rush_team_ybc_rate_rolling16 = 
+      slide2_dbl(rushing_ybc_team, rushing_yards_team, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rush_team_yac_rate_rolling16 = 
+      slide2_dbl(rushing_yac_team, rushing_yards_team, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    rush_team_stuff_rate_rolling16 = 
+      slide2_dbl(rushing_attempts_stuffed, carries, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    #Passing
+    
+    pass_pacr_rolling16 = 
+      slide2_dbl(clean_pre2006(season, passing_yards), passing_air_yards, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    pass_comp_rate_rolling16 = 
+      slide2_dbl(completions, attempts, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    pass_td_rate_rolling16 = 
+      slide2_dbl(passing_tds, completions, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    pass_yac_rate_rolling16 = 
+      slide2_dbl(passing_yards_after_catch, clean_pre2006(season, passing_yards), ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    pass_adot_rolling16 =
+      slide2_dbl(clean_pre2006(season, passing_air_yards), attempts, ~get_rate(.x,.y), .before = 15, .after = -1),
+    
+    game_number = row_number(),
+    game_number_active = cumsum(Active_Inactive == "Active"),
+
+    across(.cols = where(is.numeric),
+           .fns = ~replace_na(.x, 0))
+    ) %>% 
+  ungroup() 
+
+# # rolling_df %>% filter(player_name == "James Conner") %>% view()
+# 
+# rolling_df %>% 
+#   select(game_number_active, broken_tackle_rate_career_to_date, broken_tackle_rate_season_to_date, broken_tackle_rate_rolling16, broken_tackle_rate_moving16) %>% 
+#   pivot_longer(cols = contains("broken")) %>% 
+#   ggplot() +
+#   geom_path(aes(x = game_number_active, y = value, group = name, color = name))
+
+iwalk(list(rolling_df), 
+      ~write_dataset(.x,
+                     path = glue::glue("data/{.y}"),
+                     format = "parquet",
+                     partitioning = c("season")))
+
+```
+
+

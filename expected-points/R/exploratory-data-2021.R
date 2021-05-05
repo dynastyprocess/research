@@ -25,7 +25,9 @@ df_rushing <-
 
 #Which Years do we have broken tackles?
 df_rushing %>% filter(!is.na(broken_tackles)) %>% group_by(season) %>% tally()
-df_rushing %>% filter(!is.na(yards_after_contact_per_rush)) %>% group_by(season) %>% tally()
+df_rushing %>% filter(!is.na(rushing_attempts_stuffed)) %>% group_by(season) %>% tally()
+
+df_rushing %>% filter(!is.na(yards_after_contact_per_rush)) %>% group_by(season) %>% summarise(sum(yards_after_contact_per_rush))
 
 #evaluate O-lines
 rushing_year <- 
