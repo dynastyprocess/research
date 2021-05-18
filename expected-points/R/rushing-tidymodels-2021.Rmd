@@ -237,7 +237,7 @@ rushing_yards_recipe <-
   step_dummy(all_nominal_predictors(), one_hot = TRUE) %>% 
   step_pca(all_numeric_predictors(), num_comp = tune())
 
-# LASSO Regression
+# LASSO Regression ran in less than 2 hours
 set.seed(2005)
 
 rushing_yards_reg <- 
@@ -329,6 +329,9 @@ rushing_yards_cubist_res <-
   )
 
 # MARS Regression
+all_cores <- parallel::detectCores(logical = FALSE)
+doParallel::registerDoParallel(makePSOCKcluster(all_cores))
+
 rushing_yards_mars <- 
   mars(prod_degree = tune()) %>%
   set_engine("earth") %>%
@@ -344,33 +347,35 @@ rushing_yards_mars_res <-
     rushing_yards_mars_wf, 
     resamples = training_resamples,
     metrics = metric_set(rmse),
+    param_info = rushing_yards_mars_wf %>% parameters() %>% update(num_comp = num_comp(c(0, 40))),
     initial = 10,
     iter = 10,
     control = control_bayes(verbose = TRUE, save_pred = TRUE, save_workflow = TRUE)
   )
 
-# Bagged MARS Regression
+# Bagged MARS Regression ran over 6 hours
 rushing_yards_marsbag <- 
-  bag_mars(prod_degree = tune(), prod_degree = tune()) %>%
+  bag_mars(prod_degree = tune()) %>%
   set_engine("earth", times = 50L) %>%
   set_mode("regression")
 
 rushing_yards_marbag_wf <- 
   workflow() %>% 
   add_recipe(rushing_yards_recipe) %>% 
-  add_model(rushing_yards_marbag)
+  add_model(rushing_yards_marsbag)
 
-rushing_yards_marbag_res <- 
+rushing_yards_marsbag_res <- 
   tune_bayes(
     rushing_yards_marbag_wf, 
     resamples = training_resamples,
     metrics = metric_set(rmse),
+    param_info = rushing_yards_marbag_wf %>% parameters() %>% update(num_comp = num_comp(c(0, 40))),
     initial = 10,
     iter = 10,
     control = control_bayes(verbose = TRUE, save_pred = TRUE, save_workflow = TRUE)
   )
 
-# Support Vector Regression
+# Support Vector Regression Didn't finish overnight
 rushing_yards_svm <- 
   svm_rbf(cost = tune(), rbf_sigma = tune()) %>%
   set_engine("kernlab") %>%
@@ -386,12 +391,13 @@ rushing_yards_svm_res <-
     rushing_yards_svm_wf, 
     resamples = training_resamples,
     metrics = metric_set(rmse),
+    param_info = rushing_yards_svm_wf %>% parameters() %>% update(num_comp = num_comp(c(0, 40))),
     initial = 10,
     iter = 10,
     control = control_bayes(verbose = TRUE, save_pred = TRUE, save_workflow = TRUE)
   )
 
-# Decision Tree
+# Decision Tree Ran in less than 2 hours
 rushing_yards_cart <- 
    decision_tree(cost_complexity = tune(), min_n = tune(), tree_depth = tune()) %>% 
    set_engine("rpart") %>% 
@@ -407,16 +413,17 @@ rushing_yards_cart_res <-
     rushing_yards_cart_wf, 
     resamples = training_resamples,
     metrics = metric_set(rmse),
+    param_info = rushing_yards_cart_wf %>% parameters() %>% update(num_comp = num_comp(c(0, 40))),
     initial = 10,
     iter = 10,
     control = control_bayes(verbose = TRUE, save_pred = TRUE, save_workflow = TRUE)
   )
 
-# Random forest
+# Random forest Ran for over 5 hours
 rushing_yards_rand <- 
-   rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
-   set_engine("ranger") %>% 
-   set_mode("regression")
+  rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+  set_engine("ranger") %>% 
+  set_mode("regression")
 
 rushing_yards_rand_wf <- 
   workflow() %>% 
@@ -428,6 +435,11 @@ rushing_yards_rand_res <-
     rushing_yards_rand_wf, 
     resamples = training_resamples,
     metrics = metric_set(rmse),
+    param_info = 
+      rushing_yards_rand_wf %>% 
+      parameters() %>% 
+      update(num_comp = num_comp(c(0, 40)),
+             mtry = finalize(mtry(), rushing_train)),
     initial = 10,
     iter = 10,
     control = control_bayes(verbose = TRUE, save_pred = TRUE, save_workflow = TRUE)
