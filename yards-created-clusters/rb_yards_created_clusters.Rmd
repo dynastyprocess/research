@@ -1,0 +1,119 @@
+---
+title: "Yards Created Clusters"
+author: "Joe Sydlowski"
+date: "5/23/2021"
+output: github_document
+---
+
+## Load R Packages
+```{r pkgs}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(here)
+  library(tidymodels)
+  library(factoextra)
+  library(embed)
+  options(dplyr.summarise.inform = FALSE)
+  
+})
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import Data
+```{r data}
+
+setwd(here::here())
+
+yards_created_df <- 
+  read_csv("yards-created-data-2021.csv") %>% 
+  mutate(pass_protect_success_rate = as.numeric(pass_protect_success_rate))
+```
+
+## Principal Component Analysis  
+```{r data}
+
+pca_rec <- 
+  recipe(~., data = yards_created_df) %>%
+  update_role(name, draft_year, new_role = "id") %>%
+  step_log(draft_pick) %>%
+  step_impute_median(all_predictors()) %>%
+  step_normalize(all_predictors()) %>%
+  step_umap(all_predictors(), num_comp = 6)
+
+pca_prep <- prep(pca_rec)
+
+tidied_pca <- tidy(pca_prep, 4)
+
+# sdev <- pca_prep$steps[[4]]$res$sdev
+# 
+# percent_variation <- sdev^2 / sum(sdev^2)
+# 
+# tibble(
+#   component = unique(tidied_pca$component),
+#   percent_var = cumsum(percent_variation) ## use cumsum() to find cumulative, if you prefer
+# ) %>%
+#   mutate(component = fct_inorder(component)) %>%
+#   ggplot(aes(component, percent_var)) +
+#   geom_col() +
+#   scale_y_continuous(labels = scales::percent_format()) +
+#   labs(x = NULL, y = "Percent variance explained by each PCA component")
+
+library(tidytext)
+
+tidied_pca %>%
+  filter(component %in% paste0("PC", 1:6)) %>%
+  group_by(component) %>%
+  top_n(8, abs(value)) %>%
+  ungroup() %>%
+  mutate(terms = reorder_within(terms, abs(value), component)) %>%
+  ggplot(aes(abs(value), terms, fill = value > 0)) +
+  geom_col() +
+  facet_wrap(~component, scales = "free_y") +
+  scale_y_reordered() +
+  labs(
+    x = "Absolute value of contribution",
+    y = NULL, fill = "Positive?"
+  )
+```
+
+## K means clustering
+```{r}
+# Determine clusters
+set.seed(123)
+
+#PCA Data
+fviz_nbclust(juice(pca_prep) %>%select(-name, -draft_year), kmeans, method = "silhouette", k.max = 13)
+
+k3 <- kmeans(juice(pca_prep) %>% select(-name, -draft_year), centers = 5)
+
+cluster_df <- 
+  juice(pca_prep) %>% 
+  bind_cols(k3$cluster)
+
+fviz_cluster(k3, geom = "point", data = juice(pca_prep) %>% select(-name, -draft_year))
+
+```
+
+# K means clustering
+```{r}
+# Determine clusters
+set.seed(123)
+
+#PCA Data
+fviz_nbclust(yards_created_df %>% 
+               select(-name, -draft_year, -loaded_box_over8_rate, -pass_protect_success_rate), kmeans,
+             method = "silhouette", k.max = 20)
+
+
+k3 <- kmeans(yards_created_df %>% 
+               select(-name, -draft_year, -loaded_box_over8_rate, -pass_protect_success_rate), centers = 7)
+
+cluster_df <- 
+  yards_created_df %>% 
+  bind_cols(k3$cluster)
+
+fviz_cluster(k3, geom = "point", data = yards_created_df %>% 
+               select(-name, -draft_year, -loaded_box_over8_rate, -pass_protect_success_rate))
+
+```
