@@ -20,8 +20,11 @@ library(baguette)
 library(rules)
 library(doParallel)
 
-all_cores <- parallel::detectCores(logical = FALSE)
-doParallel::registerDoParallel(makePSOCKcluster(all_cores))
+# all_cores <- parallel::detectCores(logical = FALSE)
+# doParallel::registerDoParallel(makePSOCKcluster(all_cores))
+
+all_cores <- parallelly::availableCores() - 1
+future::plan("multisession", workers = all_cores)
 ```
 
 

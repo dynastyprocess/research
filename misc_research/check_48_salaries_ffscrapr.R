@@ -6,7 +6,7 @@ library(tidyverse)
 # 52290 AA
 
 #Connection
-conn <- mfl_connect(2020, 22627, user_agent = "dynastyprocess", rate_limit_number = 30, rate_limit_seconds = 60)
+conn <- mfl_connect(2021, 22627, user_agent = "dynastyprocess", rate_limit_number = 30, rate_limit_seconds = 60)
 
 mfl_roster <- ffscrapr::ff_rosters(conn)
 
@@ -50,14 +50,16 @@ joined <- mfl_roster %>%
   left_join(values, by = c("fantasypros_id" = "fp_id")) %>%
   left_join(mfl_points_summ, by = "player_id") %>%
   mutate(salary = 1.1*as.numeric(salary),
-         contractYear = as.numeric(contractYear) - 1,
+         contract_years = as.numeric(contract_years) - 1,
          valuePerDollar = value_2qb / salary,
          avg_pts_per_dollar = avg_pts / salary,
-         deadCap = map2_dbl(salary, contractYear, get_dead_cap),
+         deadCap = map2_dbl(salary, contract_years, get_dead_cap),
          across(where(is.numeric), ~round(.x,2))) %>% 
   select(franchise_name, player_name, pos.x, salary, value_2qb, valuePerDollar, avg_pts_per_dollar, avg_pts,
-         contractYear, deadCap) #%>% 
+         contract_years, deadCap) #%>% 
   #filter(deadCap > 0, valuePerDollar <= 80, contractYear > 0)
+
+joined %>% filter(franchise_name %in% c("Electric Woodies", "Indigo Plateau Elite")) %>% view()
 
 #Plot value
 joined %>% 
