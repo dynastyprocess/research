@@ -1,0 +1,689 @@
+---
+title: "Expected Points Receiving Models"
+author: "Joe Sydlowski"
+date: Sys.Date()
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Libraries
+library(catboost)
+
+library(tidyverse)
+library(tidymodels)
+library(here)
+library(arrow)
+library(nflfastR)
+library(lubridate)
+library(doParallel)
+library(treesnip)
+
+library(finetune)
+library(DALEXtra)
+library(iBreakDown)
+
+
+all_cores <- parallelly::availableCores() - 1
+future::plan("multisession", workers = all_cores)
+options(tune.dark = TRUE)
+# memory.limit(size = 100000)
+
+setwd(here())
+
+#Functions
+get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
+  if(is.character(from_date)) from_date <- lubridate::as_date(from_date)
+  if(is.character(to_date))   to_date   <- lubridate::as_date(to_date)
+  if (dec) { age <- lubridate::interval(start = from_date, end = to_date)/(lubridate::days(365)+lubridate::hours(6))
+  } else   { age <- lubridate::year(lubridate::as.period(lubridate::interval(start = from_date, end = to_date)))}
+  round(age,2)
+}
+```
+
+## Load the Data
+
+```{r nflfastr}
+start_year <- 2014
+
+nflfastr_rosters <-
+  nflfastR::fast_scraper_roster(start_year:2020) %>%
+  select(season, gsis_id, position, full_name, birth_date, sportradar_id) %>% 
+  mutate(position = dplyr::if_else(position %in% c("HB","FB"), "RB", position)) %>% 
+  filter(!is.na(gsis_id))
+
+pass_df <-
+  arrow::open_dataset("~/Documents/DynastyProcess/db/data/nflfastr_pbp") %>% 
+  filter(season >= start_year) %>% 
+  dplyr::collect() %>%
+  filter(play_type == "pass",
+         !str_detect(desc, "Aborted")) %>%
+  left_join(select(nflfastr_rosters, gsis_id, season, passer_position = position, passer_birth_date = birth_date),
+            by = c("passer_player_id" = "gsis_id", "season"),
+            na_matches = "never") %>%
+  left_join(select(nflfastr_rosters, gsis_id, season, receiver_position = position, receiver_birth_date = birth_date),
+            by = c("receiver_player_id" = "gsis_id", "season"),
+            na_matches = "never") %>%
+  filter(passer_position %in% c("QB","RB","WR","TE")) %>% 
+  filter(receiver_position %in% c("QB","RB","WR","TE")) %>%
+  mutate(game_month = month(game_date),
+         game_month = if_else(game_month < 3, 12, game_month),
+         game_week = week(game_date),
+         game_week = if_else(game_week <= 30, 53, game_week),
+         game_wday = as.character(wday(game_date, label = TRUE)),
+         game_wday = case_when(game_wday %in% c("Tue","Wed","Fri","Sat") ~ "Other",
+                               TRUE ~ game_wday),
+         
+         game_time = hour(hms(start_time)),
+         drive_play_count = if_else(is.na(drive_play_count), 7, drive_play_count),
+         implied_total = case_when(posteam_type == "away" & spread_line<=0 ~ (total_line+spread_line)/2 - spread_line,
+                                   posteam_type == "away" & spread_line>0 ~ (total_line-spread_line)/2,
+                                   posteam_type == "home" & spread_line>0 ~ (total_line+spread_line)/2 - spread_line,
+                                   posteam_type == "home" & spread_line<=0 ~ (total_line-spread_line)/2),
+
+         passer_age = get_age(passer_birth_date, game_date, dec = TRUE),
+         receiver_age = get_age(receiver_birth_date, game_date, dec = TRUE),
+         passer_position = if_else(passer_position != "QB", "non-QB", passer_position),
+         
+         # contested_target = if_else(is.na(pass_defense_1_player_id), 0, 1),
+         
+         #Two Point Conversion fixes
+         two_point_converted = case_when(two_point_conv_result == "success" ~ 1,
+                                         is.na(two_point_conv_result) & str_detect(desc, "ATTEMPT SUCCEEDS") ~ 1,
+                                         TRUE ~ 0),
+         score = if_else(rush_touchdown == 1 | two_point_converted == 1, 1, 0),
+         receiving_yards = case_when(is.na(receiving_yards) & two_point_attempt == 1 & two_point_converted == 1 ~ yardline_100,
+                                     is.na(receiving_yards) & two_point_attempt == 1 & two_point_converted == 0 ~ 0,
+                                     complete_pass == 0 ~ 0,
+                                     TRUE ~ receiving_yards),
+         air_yards = if_else(two_point_attempt == 1, yardline_100, air_yards),
+         complete_pass = if_else(two_point_attempt == 1 & grepl("is complete", desc), 1, complete_pass),
+         pass_complete = if_else(complete_pass == 1, "complete", "incomplete"),
+         
+         down = if_else(two_point_attempt == 1, 4, down),
+         xpass = if_else(two_point_attempt == 1, 0.75, xpass),
+         distance_to_sticks = air_yards - ydstogo,
+         
+         #Data Cleaning
+         surface = if_else(surface == "grass", "grass", "turf"),
+         pass_location = case_when(!is.na(pass_location) ~ pass_location,
+                                  str_detect(desc, " left") ~ "left",
+                                  str_detect(desc, " right") ~ "right",
+                                  str_detect(desc, " middle") ~ "middle",
+                                  TRUE ~ "unk"),
+         temp = case_when(roof %in% c("closed", "dome") ~ 68L,
+                          is.na(temp) ~ 60L,
+                          TRUE ~ temp),
+         wind = case_when(roof %in% c("closed", "dome") ~ 0L,
+                          is.na(wind) ~ 8L,
+                          TRUE ~ wind),
+         # zero_air_yards = if_else(air_yards == 0, 1, 0),
+         
+         receiving_fantasy_points = 6*pass_touchdown + 2*two_point_converted  + 0.1*receiving_yards - 2*fumble_lost + complete_pass,
+         passing_fantasy_points =  4*pass_touchdown + 2*two_point_converted  + 0.04*receiving_yards - 2*fumble_lost - 2*interception,
+         
+         season = factor(season, levels = as.character(c(2001:2020)), ordered = TRUE),
+         week = factor(week, levels = as.character(c(1:21)), ordered = TRUE),
+         game_month = factor(game_month, levels = as.character(c(9:12)), ordered = TRUE),
+         game_week = factor(game_week, levels = as.character(c(36:53)), ordered = TRUE),
+         game_time = factor(game_time, levels = as.character(c(9:23)), ordered = TRUE),
+         qtr = factor(qtr, levels = as.character(c(1:6)), ordered = TRUE),
+         down = factor(down, levels = as.character(c(1:4)), ordered = TRUE),
+         
+         goal_to_go = factor(goal_to_go, levels = as.character(c(0,1))),
+         shotgun = factor(shotgun, levels = as.character(c(0,1))),
+         no_huddle = factor(no_huddle, levels = as.character(c(0,1))),
+         qb_dropback = factor(qb_dropback, levels = as.character(c(0,1))),
+         qb_scramble = factor(qb_scramble, levels = as.character(c(0,1))),
+         two_point_attempt = factor(two_point_attempt, levels = as.character(c(0,1))),
+         score = factor(score, levels = as.character(c(0,1))),
+         first_down = factor(first_down, levels = as.character(c(0,1))),
+         pass_complete = factor(pass_complete, levels = c("complete", "incomplete"), ordered = TRUE),
+         qb_hit = factor(qb_hit, levels = as.character(c(0,1)))
+         # zero_air_yards = factor(zero_air_yards, levels = as.character(c(0,1)))
+         # contested_target = factor(contested_target, levels = as.character(c(0,1)))
+         
+         ) %>%
+  
+  filter(!is.na(air_yards)) %>% 
+  
+  select(season,
+         week,
+         
+         receiving_yards,
+         score,
+         first_down,
+         pass_complete,
+         receiving_fantasy_points,
+         passing_fantasy_points,
+         
+         qb_hit,
+         # zero_air_yards,
+         distance_to_sticks,
+         air_yards,
+         
+         # contested_target,
+         # desc,
+         # game_id,
+         # wp,
+         # series,
+         
+         posteam_type,
+         game_month,
+         game_week,
+         game_wday,
+         game_half,
+         pass_location,
+         surface,
+         wind,
+         temp,
+         roof,
+         game_time,
+         
+         passer_position,
+         receiver_position,
+         passer_age,
+         receiver_age,
+         
+         yardline_100,
+         quarter_seconds_remaining,
+         half_seconds_remaining,
+         game_seconds_remaining,
+         fixed_drive,
+         drive_play_count,
+
+         qtr,
+         down,
+         goal_to_go,
+         ydstogo,
+         shotgun,
+         no_huddle,
+         qb_dropback,
+         qb_scramble,
+         score_differential,
+         ep,
+         xpass,
+         vegas_wp,
+         two_point_attempt,
+         total_line,
+         implied_total
+  )
+
+# corr_obj <- corrr::correlate(pass_df %>% select(where(is.numeric)))
+
+# pass_df %>%
+#   group_by(drive_play_count) %>%
+#   summarise(n(), mean(air_yards, na.rm = TRUE), mean(receiving_yards, na.rm = TRUE), mean(complete_pass == 1)) %>%
+#   view()
+# 
+# pass_df %>%
+#   group_by(pass_location) %>%
+#   summarise(n(), mean(air_yards, na.rm = TRUE), mean(receiving_yards, na.rm = TRUE), mean(pass_complete == "complete")) %>%
+#   view()
+# pass_df %>% 
+#   filter(two_point_attempt == 1) %>% 
+#   group_by(play_type) %>% 
+#   tally() %>% 
+#   view()
+# 
+# pass_df %>% 
+#   filter(is.na(xpass)) %>% 
+#   view()
+# 
+# pass_df %>% 
+#   sample_n(50) %>% 
+#   view()
+
+```
+
+## Train Test Split Data 
+```{r}
+set.seed(815)
+
+pass_train <-
+  pass_df %>%
+  filter(season <= 2019) %>% head(10000)
+
+training_resamples <-
+  pass_train %>%
+  vfold_cv(v = 5)
+
+pass_test <-
+  pass_df %>%
+  filter(season > 2019)
+
+```
+
+# Pass completion
+```{r}
+
+#Create recipe
+pass_completion_recipe <- 
+  recipe(pass_complete ~ ., data = pass_train) %>%
+  step_rm(c(receiving_yards, score, first_down, receiving_fantasy_points, passing_fantasy_points)) %>% 
+  step_impute_median(all_numeric_predictors()) %>%
+  step_unknown(all_nominal_predictors()) %>% 
+  step_relevel(all_outcomes(), ref_level = "complete")
+
+prepped <- prep(pass_completion_recipe)
+juiced <- juice(prepped)
+baked <- bake(prepped, pass_train)
+levels(baked$pass_complete)
+
+# Boosted Decision Tree
+pass_completion_boost <- 
+   boost_tree(mode = "classification",
+              engine = "catboost",
+              mtry = tune(),  
+              trees = tune(),
+              min_n = tune(),
+              tree_depth = tune(),
+              learn_rate = tune(),
+              sample_size = 1)
+
+# Workflow Sets
+pass_completion_wf <- workflow(pass_completion_recipe, pass_completion_boost)
+
+new_params <- 
+  parameters(pass_completion_wf) %>%
+  update(mtry = mtry(range = c(1,41)),
+         min_n = min_n(range = c(2,500)),
+         tree_depth = tree_depth(range = c(2,10)),
+         learn_rate = learn_rate(range = c(-1.5, -0.5), trans = scales::log10_trans()))
+
+# map(rush_workflowsets$option, ~ .x$param_info$object)
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 25,
+    uncertain = 10,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+# pass_completion_tune_save <- pass_completion_tune
+
+pass_completion_tune <-
+  tune_bayes(
+    pass_completion_wf,
+    resamples = training_resamples,
+    iter = 100,
+    param_info = new_params,
+    metrics = metric_set(mn_log_loss),
+    initial = 2,
+    control = ctrl_bayes
+  )
+
+#Model Eval
+res_grid_unnest <- 
+  pass_completion_tune %>% 
+  collect_metrics()
+
+autoplot(pass_completion_tune, 
+         rank_metric = "mn_log_loss",
+         metric = "mn_log_loss",
+         select_best = FALSE) +
+  theme_minimal()
+
+best_model <- 
+  select_best(pass_completion_tune, metric = "mn_log_loss")
+
+finalize_pass_completion <- 
+  finalize_workflow(pass_completion_wf, best_model)
+
+fit_pass_completion <- fit(finalize_pass_completion, pass_train)
+
+pass_test <-
+  pass_test %>% 
+  bind_cols(predict(fit_pass_completion, pass_test, type = "prob")) %>% 
+  rename(pass_completion_exp = .pred_1) %>% 
+  select(-.pred_0)
+
+mn_log_loss_vec(pass_test$pass_complete, pass_test$pass_completion_exp)
+
+saveRDS(butcher(fit_pass_completion), "../models/fit_pass_completion.RDS")
+
+pass_completion_explainer <-
+  explain_tidymodels(
+    fit_pass_completion,
+    data = select(pass_train, -pass_complete),
+    y =  as.numeric(pass_train$pass_complete))
+
+plot(feature_importance(pass_completion_explainer))
+# 
+# pdp_time <- 
+#   model_profile(
+#     rush_yards_explainer,
+#     variables = "ydstogo",
+#     groups = "shotgun"
+#   )
+# 
+# pdp_time <- 
+#   model_profile(
+#     rush_yards_explainer,
+#     variables = "yardline_100"
+#   )
+# 
+# plot(pdp_time) + xlim(0,15)
+# 
+# rush_train %>% 
+#   filter(rushing_yards_exp > yardline_100) %>% 
+#   group_by(yardline_100) %>%
+#   summarise(mean(rushing_yards_exp), mean(rushing_yards),n()) %>%
+#   view()
+
+  
+
+```
+
+# Predicting Rush TDs
+```{r}
+set.seed(815)
+
+# fit_rush_yards <- readRDS("../models/fit_rush_yards.RDS")
+
+pass_train <-
+  pass_train %>% 
+  bind_cols(predict(fit_pass_completion, pass_train, type = "prob")) %>% 
+  rename(pass_completion_exp = .pred_1) %>% 
+  select(-.pred_0)
+
+training_resamples <-
+  pass_train %>%
+  vfold_cv(v = 5)
+
+#Create recipe
+pass_yards_recipe <- 
+  recipe(receiving_yards ~ ., data = pass_train) %>%
+  step_rm(c(pass_complete, score, first_down, receiving_fantasy_points, passing_fantasy_points)) %>% 
+  step_impute_median(all_numeric_predictors()) %>%
+  step_unknown(all_nominal_predictors())
+
+# prepped <- prep(rush_yards_recipe)
+# juiced <- juice(prepped)
+
+# Boosted Decision Tree
+pass_yards_boost <- 
+   boost_tree(mode = "regression",
+              engine = "catboost",
+              mtry = tune(),  
+              trees = tune(),
+              min_n = tune(),
+              tree_depth = tune(),
+              learn_rate = tune(),
+
+              sample_size = 1)
+
+# Workflow Sets
+pass_yards_wf <- workflow(pass_yards_recipe, pass_yards_boost)
+
+new_params <- 
+  parameters(pass_yards_wf) %>%
+  update(mtry = mtry(range = c(1,42)),
+         min_n = min_n(range = c(2,500)),
+         tree_depth = tree_depth(range = c(2,10)),
+         learn_rate = learn_rate(range = c(-2.5, -0.5), trans = scales::log10_trans()))
+
+# map(rush_workflowsets$option, ~ .x$param_info$object)
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 20,
+    uncertain = 10,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+pass_yards_tune <-
+  tune_bayes(
+    pass_yards_wf,
+    resamples = training_resamples,
+    iter = 100,
+    param_info = new_params,
+    metrics = metric_set(rmse),
+    initial = 20,
+    control = ctrl_bayes
+  )
+
+#Model Eval
+res_grid_unnest <- 
+  pass_yards_tune %>% 
+  collect_metrics()
+
+autoplot(pass_yards_tune, 
+         rank_metric = "rmse",
+         metric = "rmse",
+         select_best = FALSE) +
+  theme_minimal()
+
+best_model <- select_best(pass_yards_tune, metric = "rmse")
+
+finalize_pass_yards <- finalize_workflow(pass_yards_wf, best_model)
+
+fit_pass_yards <- fit(finalize_pass_yards, pass_train)
+
+# rush_test <-
+#   rush_test %>%
+#   bind_cols(predict(fit_pass_yards, rush_test, type = "prob")) %>%
+#   rename(rushing_td_exp = .pred_1)
+# 
+# mn_log_loss_vec(rush_test$score, rush_test$rushing_td_exp)
+
+saveRDS(butcher(fit_pass_yards), "../models/fit_pass_yards.RDS")
+
+```
+
+# Predicting Rush FDs
+```{r}
+set.seed(815)
+
+fit_rush_tds <- readRDS("../models/fit_rush_tds.RDS")
+
+rush_train <-
+  rush_train %>% 
+  bind_cols(predict(fit_rush_tds, rush_train, type = "prob")) %>%
+  rename(rushing_td_exp = .pred_1) %>% 
+  select(-.pred_0)
+
+training_resamples <-
+  rush_train %>%
+  vfold_cv(v = 5)
+
+#Create recipe
+rush_fd_recipe <- 
+  recipe(first_down ~ ., data = rush_train) %>%
+  step_rm(c(rushing_yards, score, rushing_fantasy_points)) %>% 
+  step_impute_median(all_numeric_predictors()) %>%
+  step_unknown(all_nominal_predictors())
+ 
+# prepped <- prep(rush_fd_recipe)
+# juiced <- juice(prepped)
+
+# Boosted Decision Tree
+rush_fd_boost <- 
+   boost_tree(mode = "classification",
+              engine = "catboost",
+              mtry = tune(),  
+              trees = tune(),
+              min_n = tune(),
+              tree_depth = tune(),
+              learn_rate = tune(),
+              # loss_reduction = tune(), 
+              # stop_iter = tune(),
+              sample_size = 1)
+
+# Workflow Sets
+rush_fd_wf <- workflow(rush_fd_recipe, rush_fd_boost)
+
+new_params <- 
+  parameters(rush_fd_wf) %>%
+  update(mtry = mtry(range = c(1,38)),
+         min_n = min_n(range = c(2,500)),
+         tree_depth = tree_depth(range = c(2,10)),
+         learn_rate = learn_rate(range = c(-2.5, -0.5), trans = scales::log10_trans()))
+
+# map(rush_workflowsets$option, ~ .x$param_info$object)
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 15,
+    uncertain = 5,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+rush_fd_tune_bayes <-
+  tune_bayes(
+    rush_fd_wf,
+    resamples = training_resamples,
+    iter = 50,
+    param_info = new_params,
+    metrics = metric_set(mn_log_loss),
+    initial = 10,
+    control = ctrl_bayes
+  )
+
+#Model Eval
+res_grid_unnest <- 
+  rush_fd_tune_bayes %>% 
+  collect_metrics()
+
+autoplot(rush_fd_tune_bayes, 
+         rank_metric = "mn_log_loss",
+         metric = "mn_log_loss",
+         select_best = FALSE) +
+  theme_minimal()
+
+best_model <- 
+  select_best(rush_fd_tune_bayes, metric = "mn_log_loss")
+
+finalize_rush_fd <- 
+  finalize_workflow(rush_fd_wf, best_model)
+
+fit_rush_fds <- fit(finalize_rush_fd, rush_train)
+
+rush_test <-
+  rush_test %>%
+  bind_cols(predict(fit_rush_fds, rush_test, type = "prob")) %>%
+  rename(rushing_fd_exp = .pred_1)
+
+mn_log_loss_vec(rush_test$score, rush_test$rushing_td_exp)
+
+saveRDS(butcher(fit_rush_fds), "../models/fit_rush_fds.RDS")
+```
+
+# Predicting Rush FPs
+```{r}
+set.seed(815)
+
+fit_rush_fds <- readRDS("../models/fit_rush_fds.RDS")
+
+rush_train <-
+  rush_train %>% 
+  bind_cols(predict(fit_rush_fds, rush_train, type = "prob")) %>%
+  rename(rushing_fd_exp = .pred_1) %>% 
+  select(-.pred_0)
+
+training_resamples <-
+  rush_train %>%
+  vfold_cv(v = 5)
+
+#Create recipe
+rush_fp_recipe <- 
+  recipe(rushing_fantasy_points ~ ., data = rush_train) %>%
+  step_rm(c(rushing_yards, score, first_down)) %>% 
+  step_impute_median(all_numeric_predictors()) %>%
+  step_unknown(all_nominal_predictors())
+ 
+# prepped <- prep(rush_fd_recipe)
+# juiced <- juice(prepped)
+
+# Boosted Decision Tree
+rush_fp_boost <- 
+   boost_tree(mode = "regression",
+              engine = "catboost",
+              mtry = tune(),  
+              trees = tune(),
+              min_n = tune(),
+              tree_depth = tune(),
+              learn_rate = tune(),
+              # loss_reduction = tune(), 
+              # stop_iter = tune(),
+              sample_size = 1)
+
+# Workflow Sets
+rush_fp_wf <- workflow(rush_fp_recipe, rush_fp_boost)
+
+new_params <- 
+  parameters(rush_fp_wf) %>%
+  update(mtry = mtry(range = c(1,39)),
+         min_n = min_n(range = c(2,500)),
+         tree_depth = tree_depth(range = c(2,10)),
+         learn_rate = learn_rate(range = c(-2.5, -0.5), trans = scales::log10_trans()))
+
+# map(rush_workflowsets$option, ~ .x$param_info$object)
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 15,
+    uncertain = 5,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+rush_fp_tune_bayes <-
+  tune_bayes(
+    rush_fp_wf,
+    resamples = training_resamples,
+    iter = 50,
+    param_info = new_params,
+    metrics = metric_set(rmse),
+    initial = 20,
+    control = ctrl_bayes
+  )
+
+#Model Eval
+res_grid_unnest <- 
+  rush_fd_tune_bayes %>% 
+  collect_metrics()
+
+autoplot(rush_fd_tune_bayes, 
+         rank_metric = "mn_log_loss",
+         metric = "mn_log_loss",
+         select_best = FALSE) +
+  theme_minimal()
+
+best_model <- 
+  select_best(rush_fd_tune_bayes, metric = "mn_log_loss")
+
+finalize_rush_fd <- 
+  finalize_workflow(rush_fd_wf, best_model)
+
+fit_rush_fds <- fit(finalize_rush_fd, rush_train)
+
+rush_test <-
+  rush_test %>%
+  bind_cols(predict(fit_rush_fds, rush_test, type = "prob")) %>%
+  rename(rushing_fd_exp = .pred_1)
+
+mn_log_loss_vec(rush_test$score, rush_test$rushing_td_exp)
+
+saveRDS(butcher(fit_rush_fds), "../models/fit_rush_fds.RDS")
+```
