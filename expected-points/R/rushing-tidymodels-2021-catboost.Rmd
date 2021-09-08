@@ -73,8 +73,11 @@ rush_df <-
                                TRUE ~ game_wday),
          
          game_time = hour(hms(start_time)),
-         drive_play_count = if_else(is.na(drive_play_count), 7, drive_play_count),
-
+         implied_total = case_when(posteam_type == "away" & spread_line<=0 ~ (total_line+spread_line)/2 - spread_line,
+                                   posteam_type == "away" & spread_line>0 ~ (total_line-spread_line)/2,
+                                   posteam_type == "home" & spread_line>0 ~ (total_line+spread_line)/2 - spread_line,
+                                   posteam_type == "home" & spread_line<=0 ~ (total_line-spread_line)/2),
+         
          rusher_age = get_age(birth_date, game_date, dec = TRUE),
          
           #Two Point Conversion fixes
@@ -166,8 +169,7 @@ rush_df <-
          half_seconds_remaining,
          game_seconds_remaining,
          fixed_drive,
-         drive_play_count,
-
+         
          qtr,
          down,
          goal_to_go,
@@ -180,7 +182,7 @@ rush_df <-
          ep,
          vegas_wp,
          two_point_attempt,
-         total_line
+         implied_total
   )
 
 # corr_obj <- corrr::correlate(rush_df %>% select(where(is.numeric)))
@@ -222,11 +224,6 @@ rush_yards_recipe <-
   step_rm(c(score, first_down, rushing_fantasy_points)) %>% 
   step_impute_median(all_numeric_predictors()) %>%
   step_unknown(all_nominal_predictors())
-  # step_YeoJohnson(all_numeric_predictors()) %>% 
-  # step_normalize(all_numeric_predictors())
-  # step_dummy(all_nominal_predictors(), one_hot = TRUE)
-  # step_zv(all_predictors()) %>%
-  # step_corr(all_numeric_predictors(), threshold = 0.95)
 
 # prepped <- prep(rush_yards_recipe)
 # juiced <- juice(prepped)
@@ -240,8 +237,6 @@ rush_yards_boost <-
               min_n = tune(),
               tree_depth = tune(),
               learn_rate = tune(),
-              # loss_reduction = tune(), 
-              # stop_iter = tune(),
               sample_size = 1)
 
 # Workflow Sets
@@ -249,19 +244,17 @@ rush_yards_wf <- workflow(rush_yards_recipe, rush_yards_boost)
 
 new_params <- 
   parameters(rush_yards_wf) %>%
-  update(mtry = mtry(range = c(1,36)),
-         min_n = min_n(range = c(2,500)),
+  update(mtry = mtry(range = c(1,35)),
+         min_n = min_n(range = c(2,1000)),
          tree_depth = tree_depth(range = c(2,10)),
          learn_rate = learn_rate(range = c(-2.5, -0.5), trans = scales::log10_trans()))
-
-# map(rush_workflowsets$option, ~ .x$param_info$object)
 
 # Bayesian Tuning
 ctrl_bayes <-
   control_bayes(
     verbose = TRUE,
-    no_improve = 2,
-    uncertain = 5,
+    no_improve = 20,
+    uncertain = 10,
     seed = 815,
     save_pred = TRUE,
     parallel_over = 'everything',
@@ -272,12 +265,14 @@ res_grid <-
   tune_bayes(
     rush_yards_wf,
     resamples = training_resamples,
-    iter = 2,
+    iter = 100,
     param_info = new_params,
     metrics = metric_set(rmse),
-    initial = 2,
+    initial = 10,
     control = ctrl_bayes
   )
+
+saveRDS(res_grid, "../models/rush_yards_tune.RDS")
 
 #Model Eval
 res_grid_unnest <- 
@@ -309,7 +304,7 @@ saveRDS(butcher(fit_rush_yards), "../models/fit_rush_yards.RDS")
 
 rush_yards_explainer <-
   explain_tidymodels(
-    fit_rush_yards_butch,
+    fit_rush_yards,
     data = select(rush_train, -rushing_yards),
     y =  rush_train$rushing_yards)
 
@@ -318,24 +313,11 @@ plot(feature_importance(rush_yards_explainer))
 pdp_time <- 
   model_profile(
     rush_yards_explainer,
-    variables = "ydstogo",
-    groups = "shotgun"
+    variables = "rusher_age",
+    groups = "position"
   )
 
-pdp_time <- 
-  model_profile(
-    rush_yards_explainer,
-    variables = "yardline_100"
-  )
-
-plot(pdp_time) + xlim(0,15)
-
-rush_train %>% 
-  filter(rushing_yards_exp > yardline_100) %>% 
-  group_by(yardline_100) %>%
-  summarise(mean(rushing_yards_exp), mean(rushing_yards),n()) %>%
-  view()
-
+plot(pdp_time)
   
 
 ```
@@ -374,8 +356,6 @@ rush_td_boost <-
               min_n = tune(),
               tree_depth = tune(),
               learn_rate = tune(),
-              # loss_reduction = tune(), 
-              # stop_iter = tune(),
               sample_size = 1)
 
 # Workflow Sets
@@ -383,8 +363,8 @@ rush_td_wf <- workflow(rush_td_recipe, rush_td_boost)
 
 new_params <- 
   parameters(rush_td_wf) %>%
-  update(mtry = mtry(range = c(1,37)),
-         min_n = min_n(range = c(2,500)),
+  update(mtry = mtry(range = c(1,36)),
+         min_n = min_n(range = c(2,1000)),
          tree_depth = tree_depth(range = c(2,10)),
          learn_rate = learn_rate(range = c(-2.5, -0.5), trans = scales::log10_trans()))
 
@@ -394,8 +374,8 @@ new_params <-
 ctrl_bayes <-
   control_bayes(
     verbose = TRUE,
-    no_improve = 15,
-    uncertain = 5,
+    no_improve = 20,
+    uncertain = 10,
     seed = 815,
     save_pred = TRUE,
     parallel_over = 'everything',
@@ -406,7 +386,7 @@ rush_td_tune_bayes <-
   tune_bayes(
     rush_td_wf,
     resamples = training_resamples,
-    iter = 50,
+    iter = 100,
     param_info = new_params,
     metrics = metric_set(mn_log_loss),
     initial = 10,

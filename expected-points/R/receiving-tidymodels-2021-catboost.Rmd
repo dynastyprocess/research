@@ -76,7 +76,6 @@ pass_df <-
                                TRUE ~ game_wday),
          
          game_time = hour(hms(start_time)),
-         drive_play_count = if_else(is.na(drive_play_count), 7, drive_play_count),
          implied_total = case_when(posteam_type == "away" & spread_line<=0 ~ (total_line+spread_line)/2 - spread_line,
                                    posteam_type == "away" & spread_line>0 ~ (total_line-spread_line)/2,
                                    posteam_type == "home" & spread_line>0 ~ (total_line+spread_line)/2 - spread_line,
@@ -191,7 +190,6 @@ pass_df <-
          half_seconds_remaining,
          game_seconds_remaining,
          fixed_drive,
-         drive_play_count,
 
          qtr,
          down,
