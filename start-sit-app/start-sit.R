@@ -4,8 +4,10 @@
 library(ffscrapr)
 library(ffpros)
 library(tidyverse)
+library(gt)
+library(RColorBrewer)
 
-league_conn <- ff_connect(platform = "sleeper", league_id = "739986523688230912", season = 2021)
+league_conn <- ff_connect(platform = "sleeper", league_id = "652718526494253056", season = 2021)
 
 league_settings <- ff_league(league_conn)
 
@@ -53,14 +55,55 @@ rankings_df <-
     fp_rankings(page = "superflex", sport = "nfl")
   } else if (str_detect(league_settings$scoring_flags,"1_ppr")) {
     fp_rankings(page = "ppr-flex", sport = "nfl") %>% 
-      bind_cols(fp_rankings(page = "qb", sport = "nfl"))
+      bind_rows(fp_rankings(page = "qb", sport = "nfl"))
   } else {fp_rankings(page = "flex", sport = "nfl") %>% 
-      bind_cols(fp_rankings(page = "qb", sport = "nfl"))}
+      bind_rows(fp_rankings(page = "qb", sport = "nfl"))}
 
 rosters <-
   rankings_df %>% 
   left_join(select(ffscrapr::dp_playerids(), fantasypros_id, sleeper_id), by = "fantasypros_id") %>%
   left_join(join_rules, by = "fantasypros_id") %>% 
-  left_join(league_rosters, by = c("sleeper_id"="player_id"))
+  left_join(league_rosters, by = c("sleeper_id"="player_id")) %>% 
+  transmute(franchise_name,
+            player_name,
+            position = factor(position, levels = c("QB","RB","WR","TE"), ordered = TRUE),
+            team,
+            rank,
+            ecr,
+            best,
+            worst,
+            projected_points)
 
-league_starters <- ff_starter_positions(league_conn)
+# league_starters <- ff_starter_positions(league_conn)
+
+rosters %>% 
+  filter(franchise_name == "Galletti") %>% 
+  arrange(position, -projected_points, -ecr) %>% 
+  gt() %>%
+  tab_header(title = "Start/Sit Guide") %>%
+  cols_label(franchise_name = "Franchise Name",
+             player_name = "Player",
+             position = "Position",
+             team = "Team",
+             rank = "Position",
+             ecr = "Consensus",
+             best = "Best",
+             worst = "Worst",
+             projected_points = "Projected Points") %>% 
+  tab_spanner(label = "Rank",
+              columns = c(rank, ecr, best, worst)) %>% 
+  data_color(
+    columns = c(projected_points),
+    colors = scales::col_factor(
+      brewer.pal(11,'PRGn')[3:8],
+      domain = NULL
+    ))%>% 
+  data_color(
+    columns = c(ecr),
+    colors = scales::col_factor(
+      brewer.pal(11,'PRGn')[8:3],
+      domain = NULL
+    ))
+  
+  
+  
