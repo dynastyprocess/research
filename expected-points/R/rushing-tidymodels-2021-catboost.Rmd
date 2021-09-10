@@ -393,6 +393,9 @@ rush_td_tune_bayes <-
     control = ctrl_bayes
   )
 
+saveRDS(rush_td_tune_bayes, "../models/rush_td_tune.RDS")
+
+
 #Model Eval
 res_grid_unnest <- 
   rush_td_tune_bayes %>% 
@@ -490,8 +493,8 @@ rush_fd_wf <- workflow(rush_fd_recipe, rush_fd_boost)
 
 new_params <- 
   parameters(rush_fd_wf) %>%
-  update(mtry = mtry(range = c(1,38)),
-         min_n = min_n(range = c(2,500)),
+  update(mtry = mtry(range = c(1,37)),
+         min_n = min_n(range = c(2,1000)),
          tree_depth = tree_depth(range = c(2,10)),
          learn_rate = learn_rate(range = c(-2.5, -0.5), trans = scales::log10_trans()))
 
@@ -501,8 +504,8 @@ new_params <-
 ctrl_bayes <-
   control_bayes(
     verbose = TRUE,
-    no_improve = 15,
-    uncertain = 5,
+    no_improve = 20,
+    uncertain = 10,
     seed = 815,
     save_pred = TRUE,
     parallel_over = 'everything',
@@ -513,12 +516,14 @@ rush_fd_tune_bayes <-
   tune_bayes(
     rush_fd_wf,
     resamples = training_resamples,
-    iter = 50,
+    iter = 100,
     param_info = new_params,
     metrics = metric_set(mn_log_loss),
     initial = 10,
     control = ctrl_bayes
   )
+
+saveRDS(rush_fd_tune_bayes, "../models/rush_fd_tune.RDS")
 
 #Model Eval
 res_grid_unnest <- 
@@ -545,14 +550,13 @@ rush_test <-
   rename(rushing_fd_exp = .pred_1) %>% 
   select(-.pred_0)
 
-mn_log_loss_vec(rush_test$score, rush_test$rushing_td_exp)
+mn_log_loss_vec(rush_test$first_down, rush_test$rushing_fd_exp)
 
 saveRDS(butcher(fit_rush_fds), "../models/fit_rush_fds.RDS")
 ```
 
 # Predicting Rush FPs
 # Just use a linear fit
-
 ```{r}
 set.seed(815)
 

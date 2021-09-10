@@ -241,7 +241,7 @@ set.seed(815)
 
 pass_train <-
   pass_df %>%
-  filter(season <= 2019) %>% head(10000)
+  filter(season <= 2019)
 
 training_resamples <-
   pass_train %>%
@@ -261,13 +261,12 @@ pass_completion_recipe <-
   recipe(pass_complete ~ ., data = pass_train) %>%
   step_rm(c(receiving_yards, score, first_down, receiving_fantasy_points, passing_fantasy_points)) %>% 
   step_impute_median(all_numeric_predictors()) %>%
-  step_unknown(all_nominal_predictors()) %>% 
-  step_relevel(all_outcomes(), ref_level = "complete")
+  step_unknown(all_nominal_predictors())
 
-prepped <- prep(pass_completion_recipe)
-juiced <- juice(prepped)
-baked <- bake(prepped, pass_train)
-levels(baked$pass_complete)
+# prepped <- prep(pass_completion_recipe)
+# juiced <- juice(prepped)
+# baked <- bake(prepped, pass_train)
+# levels(baked$pass_complete)
 
 # Boosted Decision Tree
 pass_completion_boost <- 
@@ -285,10 +284,10 @@ pass_completion_wf <- workflow(pass_completion_recipe, pass_completion_boost)
 
 new_params <- 
   parameters(pass_completion_wf) %>%
-  update(mtry = mtry(range = c(1,41)),
-         min_n = min_n(range = c(2,500)),
+  update(mtry = mtry(range = c(1,40)),
+         min_n = min_n(range = c(2,1000)),
          tree_depth = tree_depth(range = c(2,10)),
-         learn_rate = learn_rate(range = c(-1.5, -0.5), trans = scales::log10_trans()))
+         learn_rate = learn_rate(range = c(-2.5, -0.5), trans = scales::log10_trans()))
 
 # map(rush_workflowsets$option, ~ .x$param_info$object)
 
@@ -296,7 +295,7 @@ new_params <-
 ctrl_bayes <-
   control_bayes(
     verbose = TRUE,
-    no_improve = 25,
+    no_improve = 20,
     uncertain = 10,
     seed = 815,
     save_pred = TRUE,
@@ -313,7 +312,7 @@ pass_completion_tune <-
     iter = 100,
     param_info = new_params,
     metrics = metric_set(mn_log_loss),
-    initial = 2,
+    initial = 10,
     control = ctrl_bayes
   )
 
