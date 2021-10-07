@@ -59,6 +59,7 @@ pass_df <-
   filter(season >= start_year) %>% 
   dplyr::collect() %>%
   filter(play_type == "pass",
+         two_point_attempt == 0,
          !str_detect(desc, "Aborted")) %>%
   left_join(select(nflfastr_rosters, gsis_id, season, passer_position = position, passer_birth_date = birth_date),
             by = c("passer_player_id" = "gsis_id", "season"),
@@ -66,8 +67,8 @@ pass_df <-
   left_join(select(nflfastr_rosters, gsis_id, season, receiver_position = position, receiver_birth_date = birth_date),
             by = c("receiver_player_id" = "gsis_id", "season"),
             na_matches = "never") %>%
-  filter(passer_position %in% c("QB","RB","WR","TE")) %>% 
-  filter(receiver_position %in% c("QB","RB","WR","TE")) %>%
+  filter(passer_position %in% c("QB","RB","WR","TE"),
+         receiver_position %in% c("QB","RB","WR","TE")) %>% 
   mutate(game_month = month(game_date),
          game_month = if_else(game_month < 3, 12, game_month),
          game_week = week(game_date),
@@ -89,23 +90,25 @@ pass_df <-
          # contested_target = if_else(is.na(pass_defense_1_player_id), 0, 1),
          
          #Two Point Conversion fixes
-         two_point_converted = case_when(two_point_conv_result == "success" ~ 1,
-                                         is.na(two_point_conv_result) & str_detect(desc, "ATTEMPT SUCCEEDS") ~ 1,
-                                         TRUE ~ 0),
-         score = if_else(pass_touchdown == 1 | two_point_converted == 1, 1, 0),
-         receiving_yards = case_when(is.na(receiving_yards) & two_point_attempt == 1 & two_point_converted == 1 ~ yardline_100,
-                                     is.na(receiving_yards) & two_point_attempt == 1 & two_point_converted == 0 ~ 0,
-                                     complete_pass == 0 ~ 0,
-                                     TRUE ~ receiving_yards),
-         air_yards = if_else(two_point_attempt == 1, yardline_100, air_yards),
-         complete_pass = if_else(two_point_attempt == 1 & grepl("is complete", desc), 1, complete_pass),
+         # two_point_converted = case_when(two_point_conv_result == "success" ~ 1,
+         #                                 is.na(two_point_conv_result) & str_detect(desc, "ATTEMPT SUCCEEDS") ~ 1,
+         #                                 TRUE ~ 0),
+         # score = if_else(pass_touchdown == 1 | two_point_converted == 1, 1, 0),
+         # receiving_yards = case_when(is.na(receiving_yards) & two_point_attempt == 1 & two_point_converted == 1 ~ yardline_100,
+         #                             is.na(receiving_yards) & two_point_attempt == 1 & two_point_converted == 0 ~ 0,
+         #                             complete_pass == 0 ~ 0,
+         #                             TRUE ~ receiving_yards),
+         
+         # air_yards = if_else(two_point_attempt == 1, yardline_100, air_yards),
+         # complete_pass = if_else(two_point_attempt == 1 & grepl("is complete", desc), 1, complete_pass),
          pass_complete = if_else(complete_pass == 1, "complete", "incomplete"),
          
-         down = if_else(two_point_attempt == 1, 4, down),
+         yards_after_catch = as.factor(replace_na(yards_after_catch, 0)),
+         
+         # down = if_else(two_point_attempt == 1, 4, down),
          xpass = if_else(two_point_attempt == 1, 0.75, xpass),
          distance_to_sticks = air_yards - ydstogo,
          distance_to_endzone = air_yards - yardline_100,
-
          
          #Data Cleaning
          surface = if_else(surface == "grass", "grass", "turf"),
@@ -120,14 +123,13 @@ pass_df <-
          wind = case_when(roof %in% c("closed", "dome") ~ 0L,
                           is.na(wind) ~ 8L,
                           TRUE ~ wind),
-         # zero_air_yards = if_else(air_yards == 0, 1, 0),
+
+         # receiving_fantasy_points = 6*pass_touchdown + 2*two_point_converted  + 
+         #   0.1*receiving_yards - 2*fumble_lost + complete_pass,
+         # passing_fantasy_points =  4*pass_touchdown + 2*two_point_converted  + 
+         #   0.04*receiving_yards - 2*fumble_lost - 2*interception,
          
-         receiving_fantasy_points = 6*pass_touchdown + 2*two_point_converted  + 
-           0.1*receiving_yards - 2*fumble_lost + complete_pass,
-         passing_fantasy_points =  4*pass_touchdown + 2*two_point_converted  + 
-           0.04*receiving_yards - 2*fumble_lost - 2*interception,
-         
-         season = factor(season, levels = as.character(c(2001:2020)), ordered = TRUE),
+         season = factor(season, levels = as.character(c(2001:2022)), ordered = TRUE),
          week = factor(week, levels = as.character(c(1:21)), ordered = TRUE),
          game_month = factor(game_month, levels = as.character(c(9:12)), ordered = TRUE),
          game_week = factor(game_week, levels = as.character(c(36:53)), ordered = TRUE),
@@ -138,30 +140,27 @@ pass_df <-
          goal_to_go = factor(goal_to_go, levels = as.character(c(0,1))),
          shotgun = factor(shotgun, levels = as.character(c(0,1))),
          no_huddle = factor(no_huddle, levels = as.character(c(0,1))),
-         # qb_dropback = factor(qb_dropback, levels = as.character(c(0,1))),
-         # qb_scramble = factor(qb_scramble, levels = as.character(c(0,1))),
-         two_point_attempt = factor(two_point_attempt, levels = as.character(c(0,1))),
-         score = factor(score, levels = as.character(c(0,1))),
+         # two_point_attempt = factor(two_point_attempt, levels = as.character(c(0,1))),
+         # score = factor(score, levels = as.character(c(0,1))),
+         pass_touchdown = factor(pass_touchdown, levels = as.character(c(0,1))),
          first_down = factor(first_down, levels = as.character(c(0,1))),
          pass_complete = factor(pass_complete, levels = c("complete", "incomplete"), ordered = TRUE),
          interception = factor(interception, levels = as.character(c(0,1))), 
-         qb_hit = factor(qb_hit, levels = as.character(c(0,1)))
-         # zero_air_yards = factor(zero_air_yards, levels = as.character(c(0,1)))
-         # contested_target = factor(contested_target, levels = as.character(c(0,1)))
-         
-         ) %>%
+         qb_hit = factor(qb_hit, levels = as.character(c(0,1)))) %>%
   
   filter(!is.na(air_yards)) %>% 
   
   select(season,
          week,
          
-         receiving_yards,
-         score,
+         # receiving_yards,
+         yards_after_catch,
+         pass_touchdown,
+         # score,
          first_down,
          pass_complete,
-         receiving_fantasy_points,
-         passing_fantasy_points,
+         # receiving_fantasy_points,
+         # passing_fantasy_points,
          interception,
          
          qb_hit,
@@ -194,7 +193,7 @@ pass_df <-
          receiver_age,
          
          yardline_100,
-         quarter_seconds_remaining,
+         # quarter_seconds_remaining,
          half_seconds_remaining,
          game_seconds_remaining,
          fixed_drive,
@@ -205,38 +204,53 @@ pass_df <-
          ydstogo,
          shotgun,
          no_huddle,
-         # qb_dropback,
-         # qb_scramble,
+
          score_differential,
          ep,
          xpass,
          vegas_wp,
-         two_point_attempt,
+         # two_point_attempt,
          total_line,
          implied_total
   )
 
 # corr_obj <- corrr::correlate(pass_df %>% select(where(is.numeric)))
-
 # pass_df %>%
-#   group_by(drive_play_count) %>%
-#   summarise(n(), mean(air_yards, na.rm = TRUE), mean(receiving_yards, na.rm = TRUE), mean(complete_pass == 1)) %>%
-#   view()
-# 
-# pass_df %>%
-#   group_by(pass_location) %>%
-#   summarise(n(), mean(air_yards, na.rm = TRUE), mean(receiving_yards, na.rm = TRUE), mean(pass_complete == "complete")) %>%
-#   view()
-# pass_df %>% 
-#   filter(two_point_attempt == 1) %>% 
-#   group_by(play_type) %>% 
-#   tally() %>% 
+#   group_by(two_point_attempt, score) %>%
+#   summarise(n(),
+#             mean(air_yards, na.rm = TRUE),
+#             mean(receiving_yards, na.rm = TRUE),
+#             mean(yards_after_catch, na.rm = TRUE),
+#             mean(pass_complete == "complete")) %>%
 #   view()
 # 
 # pass_df %>% 
-#   filter(is.na(xpass)) %>% 
+#   filter(air_yards == yardline_100) %>%
+#       group_by(two_point_attempt, score, pass_complete) %>%
+#     summarise(n(),
+#             mean(air_yards, na.rm = TRUE),
+#             mean(receiving_yards, na.rm = TRUE),
+#             mean(yards_after_catch, na.rm = TRUE)) %>% 
+#   view()
+#   
+# pass_df %>%
+#   filter(air_yards == yardline_100, score == 0, pass_complete == "complete", two_point_attempt == 0) %>%
+#   pull(desc)
+#   view()
+#   
+#   pass_df %>%
+#   filter(air_yards == receiving_yards, yards_after_catch != 0, pass_complete == "complete", two_point_attempt == 0) %>%
+#   # pull(desc)
 #   view()
 # 
+#   pass_df %>% 
+#     filter(air_yards == receiving_yards) %>%
+#     group_by(two_point_attempt, score, pass_complete) %>%
+#     summarise(n(),
+#               mean(air_yards, na.rm = TRUE),
+#               mean(receiving_yards, na.rm = TRUE),
+#               mean(yards_after_catch, na.rm = TRUE)) %>% 
+#     view()
 # pass_df %>% 
 #   sample_n(50) %>% 
 #   view()
@@ -249,7 +263,7 @@ set.seed(815)
 
 pass_train <-
   pass_df %>%
-  filter(season <= 2019)
+  filter(season <= 2019) %>% head(500)
 
 training_resamples <-
   pass_train %>%
@@ -267,11 +281,12 @@ pass_test <-
 #Create recipe
 pass_completion_recipe <- 
   recipe(pass_complete ~ ., data = pass_train) %>%
-  step_rm(c(season, receiving_yards, score, first_down, receiving_fantasy_points, passing_fantasy_points)) %>% 
+  update_role(season, new_role = "id") %>% 
+  step_rm(c(first_down, yards_after_catch, interception, pass_touchdown)) %>% 
   step_impute_median(all_numeric_predictors()) %>%
   step_unknown(all_nominal_predictors())
 
-# prepped <- prep(pass_completion_recipe)
+# prepped <- prep(pass_completion_recipe, verbose = TRUE)
 # juiced <- juice(prepped)
 # baked <- bake(prepped, pass_train)
 # levels(baked$pass_complete)
@@ -281,7 +296,7 @@ pass_completion_boost <-
    boost_tree(mode = "classification",
               engine = "catboost",
               mtry = tune(),  
-              trees = tune(),
+              trees = 1000,
               min_n = tune(),
               tree_depth = tune(),
               learn_rate = tune(),
@@ -292,7 +307,7 @@ pass_completion_wf <- workflow(pass_completion_recipe, pass_completion_boost)
 
 new_params <- 
   parameters(pass_completion_wf) %>%
-  update(mtry = mtry(range = c(1,39)),
+  update(mtry = mtry(range = c(1,37)),
          min_n = min_n(range = c(2,2000)),
          tree_depth = tree_depth(range = c(2,12)),
          learn_rate = learn_rate(range = c(-3.5, -0.5), trans = scales::log10_trans()))
@@ -303,8 +318,8 @@ new_params <-
 ctrl_bayes <-
   control_bayes(
     verbose = TRUE,
-    no_improve = 20,
-    uncertain = 10,
+    no_improve = 2,
+    uncertain = 2,
     seed = 815,
     save_pred = TRUE,
     parallel_over = 'everything',
@@ -313,17 +328,17 @@ ctrl_bayes <-
 
 # pass_completion_tune_save <- pass_completion_tune
 
-pass_completion_tune <- readRDS("../models/pass_completion_tune.RDS")
+# pass_completion_tune <- readRDS("../models/pass_completion_tune.RDS")
 
 pass_completion_tune <-
   tune_bayes(
     pass_completion_wf,
     resamples = training_resamples,
-    iter = 100,
+    iter = 2,
     param_info = new_params,
     metrics = metric_set(mn_log_loss),
-    initial = pass_completion_tune,
-    # initial = 10,
+    # initial = pass_completion_tune,
+    initial = 2,
     control = ctrl_bayes
   )
 
@@ -391,17 +406,18 @@ plot(feature_importance(pass_completion_explainer))
 
 ```
 
-# Predicting Rec Yards
+# Predicting YAC
 ```{r}
 set.seed(815)
 
-fit_pass_completion <- readRDS("../models/fit_pass_completion.RDS")
+# fit_pass_completion <- readRDS("../models/fit_pass_completion.RDS")
 
 pass_train <-
   pass_train %>% 
-  bind_cols(predict(fit_pass_completion, pass_train, type = "prob")) %>% 
-  rename(pass_completion_exp = .pred_complete) %>% 
-  select(-.pred_incomplete)
+  filter(pass_complete == "complete")
+  # bind_cols(predict(fit_pass_completion, pass_train, type = "prob")) %>% 
+  # rename(pass_completion_exp = .pred_complete) %>% 
+  # select(-.pred_incomplete)
 
 training_resamples <-
   pass_train %>%
@@ -409,8 +425,9 @@ training_resamples <-
 
 #Create recipe
 pass_yards_recipe <- 
-  recipe(receiving_yards ~ ., data = pass_train) %>%
-  step_rm(c(pass_complete, score, first_down, receiving_fantasy_points, passing_fantasy_points)) %>% 
+  recipe(yards_after_catch ~ ., data = pass_train) %>%
+  update_role(season, new_role = "id") %>% 
+  step_rm(c(first_down, pass_complete, interception, pass_touchdown)) %>% 
   step_impute_median(all_numeric_predictors()) %>%
   step_unknown(all_nominal_predictors())
 
@@ -419,10 +436,10 @@ pass_yards_recipe <-
 
 # Boosted Decision Tree
 pass_yards_boost <- 
-   boost_tree(mode = "regression",
+   boost_tree(mode = "classification",
               engine = "catboost",
               mtry = tune(),  
-              trees = tune(),
+              trees = 1000,
               min_n = tune(),
               tree_depth = tune(),
               learn_rate = tune(),
@@ -434,7 +451,7 @@ pass_yards_wf <- workflow(pass_yards_recipe, pass_yards_boost)
 
 new_params <- 
   parameters(pass_yards_wf) %>%
-  update(mtry = mtry(range = c(1,40)),
+  update(mtry = mtry(range = c(1,37)),
          min_n = min_n(range = c(2,1000)),
          tree_depth = tree_depth(range = c(2,10)),
          learn_rate = learn_rate(range = c(-2.5, -0.5), trans = scales::log10_trans()))
@@ -445,8 +462,8 @@ new_params <-
 ctrl_bayes <-
   control_bayes(
     verbose = TRUE,
-    no_improve = 20,
-    uncertain = 10,
+    no_improve = 2,
+    uncertain = 2,
     seed = 815,
     save_pred = TRUE,
     parallel_over = 'everything',
@@ -457,10 +474,10 @@ pass_yards_tune <-
   tune_bayes(
     pass_yards_wf,
     resamples = training_resamples,
-    iter = 100,
+    iter = 2,
     param_info = new_params,
-    metrics = metric_set(rmse),
-    initial = 20,
+    metrics = metric_set(mn_log_loss),
+    initial = 2,
     control = ctrl_bayes
   )
 

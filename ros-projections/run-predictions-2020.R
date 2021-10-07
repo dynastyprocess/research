@@ -17,27 +17,20 @@ get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
   } else   { age <- lubridate::year(lubridate::as.period(lubridate::interval(start = from_date, end = to_date)))}
   round(age,2)
 }
-
+setwd("~/Documents/DynastyProcess/research/expected-points")
 filenames <- list.files("./models", pattern="fit", full.names=TRUE)
 obj_names <- str_remove_all(filenames,"./models/|.RDS")
 models <- map(filenames, readRDS) %>% set_names(obj_names)
 
-start_year <- 2014
-
 nflfastr_rosters <-
-  nflfastR::fast_scraper_roster(2021) %>%
+  nflfastR::fast_scraper_roster(2020) %>%
   dplyr::select(season, gsis_id, position, full_name, birth_date, sportradar_id) %>% 
   dplyr::mutate(position = dplyr::if_else(position %in% c("HB","FB"), "RB", position))
-
-future::plan("multisession")
-# season_ids <- nflfastR::fast_scraper_schedules(2021) %>% pull(game_id)
-# nfl_pbp <- nflfastR::build_nflfastR_pbp(season_ids)
 
 
 # RUSHING PREDICTIONS -----------------------------------------------------
 rush_df <-
-  nflfastR::load_pbp(2021) %>% 
-  # nfl_pbp %>% 
+  nflreadr::load_pbp(2020) %>% 
   # arrow::open_dataset("~/Documents/DynastyProcess/db/data/nflfastr_pbp") %>% 
   # dplyr::filter(season >= start_year) %>% 
   # dplyr::collect() %>%
@@ -141,8 +134,7 @@ rush_df <-
 
 # RECEIVING PREDICTIONS ---------------------------------------------------
 pass_df <-
-  nflfastR::load_pbp(2021) %>% 
-  # nfl_pbp %>% 
+  nflreadr::load_pbp(2020) %>% 
   # arrow::open_dataset("~/Documents/DynastyProcess/db/data/nflfastr_pbp") %>% 
   # dplyr::filter(season >= start_year) %>% 
   # dplyr::collect() %>%
@@ -180,6 +172,7 @@ pass_df <-
                                           posteam_type == "home" & spread_line<=0 ~ (total_line-spread_line)/2),
                 passer_age = get_age(passer_birth_date, game_date, dec = TRUE),
                 receiver_age = get_age(receiver_birth_date, game_date, dec = TRUE),
+                true_passer_pos = passer_position,
                 passer_position = if_else(passer_position != "QB", "non-QB", passer_position),
                 #Two Point Conversion fixes
                 two_point_converted = case_when(two_point_conv_result == "success" ~ 1,
@@ -196,8 +189,6 @@ pass_df <-
                 down = if_else(two_point_attempt == 1, 4, down),
                 xpass = if_else(two_point_attempt == 1, 0.75, xpass),
                 distance_to_sticks = air_yards - ydstogo,
-                distance_to_endzone = air_yards - yardline_100,
-                
                 #Data Cleaning
                 surface = if_else(surface == "grass", "grass", "turf"),
                 pass_location = case_when(!is.na(pass_location) ~ pass_location,
@@ -244,15 +235,13 @@ pass_df <-
   dplyr::select(-.pred_0) %>%
   dplyr::bind_cols(predict(models$fit_pass_int, new_data = ., type = "prob")) %>%
   dplyr::rename(passing_int_exp = .pred_1) %>%
-  dplyr::select(-.pred_0) %>% 
+  dplyr::select(-.pred_0) %>%  
   
-  dplyr::mutate(rec_td_exp = if_else(air_yards == yardline_100, pass_completion_exp, rec_td_exp)) %>% 
-                
   dplyr::transmute(season = substr(game_id, 1, 4),
                    week,
                    game_id,
                    play_id = as.factor(play_id),
-                   play_description = desc, #qtr, yardline_100, drive, two_point_attempt, distance_to_endzone,
+                   play_description = desc,
                    # fantasy_player_id,
                    # full_name,
                    # position,
@@ -260,7 +249,7 @@ pass_df <-
                    
                    pass.player_id = passer_player_id,
                    pass.full_name = passer_full_name,
-                   pass.position = passer_position,
+                   pass.position = true_passer_pos,
                    
                    rec.player_id = receiver_player_id,
                    rec.full_name = receiver_full_name,
@@ -285,13 +274,6 @@ pass_df <-
                    interception_exp = passing_int_exp,
                    fumble_lost)
 
-# Investigate Josh Allen
-# josh_allen <- pass_df %>% 
-#   filter(pass.full_name == "Josh Allen", week == 3) %>% 
-#   select(qtr, play_description, pass.full_name, rec.full_name, yardline_100, air_yards, distance_to_endzone, drive,
-#          complete_pass, complete_pass_exp, touchdown, touchdown_exp) %>%
-#   mutate(across(contains("exp"), ~round(.x, 3))) %>% 
-#   view()
 
 pass_df_pivot <- 
   pass_df %>% 
@@ -330,6 +312,7 @@ combined_df <-
          total_fantasy_points = sum(across(ends_with("fantasy_points"), sum)),
          total_fantasy_points_exp = sum(across(ends_with("fantasy_points_exp"), sum)))
 
+#Create diff fields
 exp_fields <- combined_df %>% select(contains("exp")) %>% colnames() %>% str_remove_all("_exp")
 
 for(f in exp_fields) {
@@ -338,56 +321,275 @@ for(f in exp_fields) {
 
 
 #Pull in snap data
-snaps <- load_snap_counts() %>% 
-  transmute(game_id, player, team, offense_snaps, offense_pct, pfr_id = pfr_player_id) %>% 
+snaps <- load_snap_counts(2020) %>% 
+  transmute(game_id, player, team, offense_snaps, offense_pct = offense_pct/100,
+            pfr_id, season = as.character(season)) %>% 
   # left_join(select(load_rosters(), gsis_id, full_name, pfr_id, position), by = "pfr_id") %>% view()
   left_join(select(dp_playerids(), gsis_id, fantasypros_id, pfr_id, position), by = "pfr_id") %>%
-  full_join(combined_df, by = c("game_id", "gsis_id" = "player_id")) %>%
+  full_join(combined_df, by = c("game_id", "gsis_id" = "player_id", "season")) %>%
   filter(position.x %in% c("QB","RB","WR","TE") | position.y %in% c("QB","RB","WR","TE")) %>% 
   mutate(full_name = coalesce(full_name, player),
          team = coalesce(posteam, team),
          position = coalesce(position.y,position.x),
          season = coalesce(season, substr(game_id,1,4)),
          week = coalesce(as.numeric(week), as.numeric(substr(game_id,6,7))),
-         
          across(where(is.numeric), ~replace_na(.x, 0))) %>%
   select(-c(player, pfr_id, position.x, position.y, posteam))
   
+arrow::write_parquet(snaps, "expected_points_2020.pdata")
 
+fp <-
+  arrow::open_dataset("~/Documents/DynastyProcess/db/data/fp_ecr") %>%
+  dplyr::collect() 
+
+# fp %>% group_by(page_type, fp_page, ecr_type) %>% summarise(n(), min(scrape_date), max(scrape_date)) %>% view()
+
+fp_ros <- fp %>% 
+  mutate(page_class = case_when(str_detect(fp_page, "ros-qb") ~ "ros_qb",
+                                str_detect(fp_page, "ros-ppr-rb") ~ "ros_rb",
+                                str_detect(fp_page, "ros-ppr-wr") ~ "ros_wr",
+                                str_detect(fp_page, "ros-ppr-te") ~ "ros_te",
+                                TRUE ~ "skip")) %>% 
+  filter(page_class != "skip",
+         scrape_date %ni% c("2020-10-12","2020-10-16"),
+         scrape_date >= "2020-09-10",
+         scrape_date <= "2020-12-30") %>% 
+  group_by(scrape_date) %>% 
+  mutate(week = cur_group_id()) %>% 
+  ungroup() %>% 
+  filter(week > 1)
+
+fp_preseason <- fp %>% 
+  filter(str_detect(fp_page, "cheatsheets"),
+         scrape_date == "2020-09-03",
+         fp_page != "ppr-cheatsheets",
+         pos %in% c("QB","RB","WR","TE")) %>% 
+  transmute(id, preszn_ecr = ecr, pos)
+
+fp_preseason %>% group_by(pos) %>% summarise(max_ecr = max(preszn_ecr)) %>% ungroup()
+fp_ros %>% group_by(pos) %>% summarise(max_ecr = max(ecr)) %>% ungroup()
+
+fp_combo <- 
+  fp_ros %>% 
+  left_join(select(fp_preseason, id, preszn_ecr), by = "id") %>% 
+  transmute(id, ecr, pos, preszn_ecr, week, season = "2020") %>% 
+  full_join(snaps, by = c("id" = "fantasypros_id", "season", "week")) %>% 
+  mutate(position = coalesce(position, pos),
+         preszn_ecr = case_when(is.na(preszn_ecr) & position == "QB" ~ 67,
+                                is.na(preszn_ecr) & position == "RB" ~ 160,
+                                is.na(preszn_ecr) & position == "WR" ~ 236,
+                                is.na(preszn_ecr) & position == "TE" ~ 104,
+                                TRUE ~ preszn_ecr),
+         ecr = case_when(is.na(ecr) & position == "QB" ~ 82,
+                         is.na(ecr) & position == "RB" ~ 142,
+                         is.na(ecr) & position == "WR" ~ 230,
+                         is.na(ecr) & position == "TE" ~ 114,
+                         TRUE ~ ecr)) %>%
+  filter(!is.na(offense_snaps)) %>% 
+  select(-pos, -id) 
+
+# week1_priors <- 
+#   fp_combo %>% 
+#   filter(season == "2019" | week == 1) %>% 
+#   arrange(season, week) %>% 
+#   group_by(gsis_id) %>% 
+#   mutate(week = as.character(week),
+#          across(.cols = where(is.numeric),
+#                 .fns = ~slider::slide_dbl(.x, mean, .before = Inf, .after = -1))) %>% 
+#   ungroup() %>% 
+#   filter(season == "2020")
+
+weekly2020 <- 
+  fp_combo %>% 
+  filter(season == "2020", week <= 16) %>% 
+  group_by(gsis_id) %>%
+  arrange(week) %>%
+  mutate(# across(where(is.numeric), ~replace_na(.x, 0)),
+    future_ppg = slider::slide_dbl(total_fantasy_points, ~mean(.x, na.rm = TRUE), .after = Inf),
+    across(.cols = where(is.numeric) & !contains("ecr") & !week & !future_ppg,
+           .fns = ~slider::slide_dbl(.x, ~mean(.x, na.rm = TRUE), .before = Inf, .after = -1))) %>%
+  ungroup() %>% 
+  na.omit() #drop players' first game of the szn
+
+
+ecr_model <- function(df) {
+  lm(future_ppg ~ ecr, data = df)
+}
+
+preszn_ecr_model <- function(df) {
+  lm(future_ppg ~ preszn_ecr, data = df)
+}
+
+fp_model <- function(df) {
+  lm(future_ppg ~ total_fantasy_points, data = df)
+}
+
+ep_model <- function(df) {
+  lm(future_ppg ~ total_fantasy_points_exp, data = df)
+}
+
+combo_model <- function(df) {
+  lm(future_ppg ~ preszn_ecr + ecr + total_fantasy_points + total_fantasy_points_exp, data = df)
+}
+
+models_ck <- 
+  fp_combo %>% 
+  select(position, season, week, total_fantasy_points,  total_fantasy_points_exp, full_name)
+
+models <- 
+  weekly2020 %>% 
+  # filter(preszn_ecr <= 48) %>% 
+  select(position, week, future_ppg, ecr, preszn_ecr, total_fantasy_points,  total_fantasy_points_exp, full_name) %>% 
+  # na.omit() %>% 
+  group_by(position, week) %>% 
+  nest() %>% 
+  mutate(ecr_model = map(data, ecr_model),
+         ecr_glance = map(ecr_model, broom::glance),
+         preszn_model = map(data, preszn_ecr_model),
+         preszn_glance = map(preszn_model, broom::glance),
+         fp_model = map(data, fp_model),
+         fp_glance = map(fp_model, broom::glance),
+         ep_model = map(data, ep_model),
+         ep_glance = map(ep_model, broom::glance),
+         combo_model = map(data, combo_model),
+         combo_glance = map(combo_model, broom::glance)
+         ) %>%
+  ungroup() %>% 
+  hoist(.col = ecr_glance, ecr_rsq = "r.squared") %>% 
+  hoist(.col = preszn_glance, preszn_rsq = "r.squared") %>% 
+  hoist(.col = fp_glance, fp_rsq = "r.squared") %>% 
+  hoist(.col = ep_glance, ep_rsq = "r.squared") %>% 
+  hoist(.col = combo_glance, combo_rsq = "r.squared")
   
-arrow::write_parquet(combined_df, "expected_points_2021.pdata")
+models %>% 
+  pivot_longer(cols = contains("rsq")) %>% 
+  arrange(position, week) %>% 
+  ggplot(aes(x = week, y = value, color = name)) +
+  geom_path() +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(1:16)) + 
+  theme(panel.grid.minor = element_blank()) +
+  facet_wrap(~position)
 
-arrow::write_parquet(snaps, "expected_points_2021.pdata")
-              
 
-combined_df %>% select(full_name, week, contains("total")) %>% view()
-
-
-#checks
-pass_df_pivot %>% 
-  group_by(player_id, player_type, full_name, position, posteam) %>% 
-  summarise(across(where(is.numeric), sum)) %>% 
-  mutate(across(where(is.numeric), ~round(.x, 1))) %>%
-  view()
-
-rush_df %>%
-  group_by(fantasy_player_id, full_name, position) %>% 
-  summarise(across(where(is.numeric), sum)) %>% 
-  mutate(across(where(is.numeric), ~round(.x, 1))) %>%
-  view()
-
-#Plots
-library(ggplot2)
-library(ggrepel)
-#fake plot
-ep %>% 
-  # group_by(Pos) %>% 
-  filter(Pos == "WR") %>% 
-  slice_max(order_by = -`ROS ECR`, n = 48) %>% 
-  # ungroup() %>% 
-  ggplot(aes(x = `ROS ECR`, y = `Total FP Exp`, label = `Player Name`)) +
+models %>% 
+  pivot_longer(cols = contains("rsq")) %>% 
+  arrange(position, week) %>% 
+  ggplot(aes(x = week, y = value, color = name)) +
   geom_point() +
-  scale_x_reverse() +
-  geom_smooth(se = FALSE, method = "lm") +
-  geom_label_repel(force = 5) +
-  tantastic::theme_tantastic()
+  geom_smooth(se = FALSE) +
+  theme_minimal() +
+  scale_x_continuous(breaks = seq(1:16)) + 
+  theme(panel.grid.minor = element_blank()) +
+  facet_wrap(~position)
+
+## Try a catboost because why not
+
+training_resamples <-
+  weekly2020 %>%
+  vfold_cv(v = 5)
+
+#Create recipe
+ppg_recipe <- 
+  recipe(future_ppg ~ ., data = weekly2020) %>%
+  update_role(c(season, game_id, team, gsis_id, full_name, position), new_role = "id")
+
+# prepped <- prep(ppg_recipe)
+# juiced <- juice(prepped)
+
+all_cores <- parallelly::availableCores() - 1
+future::plan("multisession", workers = all_cores)
+
+
+# Boosted Decision Tree
+ppg_boost <- 
+  boost_tree(mode = "regression",
+             engine = "catboost",
+             mtry = tune(),  
+             trees = 1000,
+             min_n = tune(),
+             tree_depth = tune(),
+             learn_rate = tune(),
+             sample_size = 1)
+
+# Workflow Sets
+ppg_wf <- workflow(ppg_recipe, ppg_boost)
+
+new_params <- 
+  parameters(ppg_wf) %>%
+  update(mtry = mtry(range = c(1,4)),
+         min_n = min_n(range = c(100,1000)),
+         tree_depth = tree_depth(range = c(2,3)),
+         learn_rate = learn_rate(range = c(-2.5, -0.5), trans = scales::log10_trans()))
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 10,
+    uncertain = 5,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+res_grid_save <- res_grid
+
+res_grid <-
+  tune_bayes(
+    ppg_wf,
+    resamples = training_resamples,
+    iter = 100,
+    param_info = new_params,
+    metrics = metric_set(rmse),
+    initial = 10,
+    control = ctrl_bayes
+  )
+
+res_grid %>% collect_metrics()
+
+best_model <- select_best(res_grid, metric = "rmse")
+
+# best_model <-  tibble(mtry=47, trees=1938, min_n=855, tree_depth=10, learn_rate=0.0647)
+
+finalize_ppg <- finalize_workflow(ppg_wf, best_model)
+
+fit_ppg <- fit(finalize_ppg, weekly2020)
+
+library(DALEXtra)
+ppg_explainer <-
+  explain_tidymodels(
+    fit_ppg,
+    data = select(weekly2020, -c(future_ppg)),
+    y =  weekly2020$future_ppg)
+
+# plot(feature_importance(ppg_explainer))
+vip_df <-  model_parts(ppg_explainer)
+
+vip_df %>% 
+  # filter(variable %in% c("_baseline_", "_full_model_") | mean_dropout_loss >= 1) %>% 
+  plot()
+
+pdp_time <- 
+  model_profile(
+    ppg_explainer,
+    variables = "preszn_ecr",
+    groups = "position"
+  )
+
+plot(pdp_time)
+
+test_obs <- weekly2020 %>% filter(full_name == "Tee Higgins", week == 2)
+test_obs$future_ppg
+
+predict_parts(explainer = ppg_explainer, new_observation = test_obs) %>% plot()
+
+weekly2020_fit <-
+  weekly2020 %>%
+  bind_cols(predict(fit_ppg, weekly2020)) %>%
+  rename(future_ppg_pred = .pred) %>% 
+  select(full_name, week, position, ecr, preszn_ecr, future_ppg_pred, future_ppg)
+
+rmse_vec(weekly2020_fit$future_ppg_pred, weekly2020_fit$future_ppg)
+
