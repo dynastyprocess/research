@@ -32,7 +32,7 @@ pbp %>%
   gt_theme_espn() %>% 
   tab_header(title = 'Football "And-One" Leaderboard: 2011-2021',
              subtitle = "Plays where the defender commits pass interference and the receiver still catches it") %>%
-  cols_label(full_name = "",
+  cols_label(full_name = "Player",
              plays = "Plays",
              receiving_yards = "Yards",
              yards_after_catch = "Yards After Catch",
@@ -41,7 +41,7 @@ pbp %>%
              vegas_wpa = "Win Probability Added") %>%
   fmt_percent(columns = vegas_wpa, decimals = 1) %>% 
   fmt_number(columns = epa, decimals = 1) %>%
-  tab_footnote(footnote = ' h/t Robert Mays and Benjamin Solak - The Atletic Football Show',
+  tab_footnote(footnote = 'h/t Robert Mays and Benjamin Solak - The Athletic Football Show',
                locations = cells_title(groups = c("subtitle"))) %>% 
   tab_source_note(source_note = "Chart: @JoeSydlowskiFF | Data: nflfastR") %>% 
   gtsave(filename = "and-one-chart.png")
