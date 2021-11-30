@@ -1,0 +1,873 @@
+---
+title: "Expected Points Receiving Models"
+author: "Joe Sydlowski"
+date: Sys.Date()
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Libraries
+# library(catboost)
+# library(treesnip)
+
+library(tidyverse)
+library(tidymodels)
+library(here)
+library(arrow)
+# library(nflfastR)
+library(lubridate)
+library(doParallel)
+library(butcher)
+library(finetune)
+library(DALEXtra)
+library(iBreakDown)
+
+all_cores <- parallelly::availableCores() - 1
+future::plan("multisession", workers = all_cores)
+# memory.limit(size = 100000)
+
+setwd(here())
+
+#Functions
+get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
+  if(is.character(from_date)) from_date <- lubridate::as_date(from_date)
+  if(is.character(to_date))   to_date   <- lubridate::as_date(to_date)
+  if (dec) { age <- lubridate::interval(start = from_date, end = to_date)/(lubridate::days(365)+lubridate::hours(6))
+  } else   { age <- lubridate::year(lubridate::as.period(lubridate::interval(start = from_date, end = to_date)))}
+  round(age,2)
+}
+```
+
+## Load the Data
+
+```{r nflfastr}
+start_year <- 2014
+
+nflfastr_rosters <-
+  nflreadr::load_rosters(start_year:2021) %>% 
+  # nflfastR::fast_scraper_roster(start_year:2020) %>%
+  select(season, gsis_id, position, full_name, birth_date, sportradar_id) %>% 
+  mutate(position = dplyr::if_else(position %in% c("HB","FB"), "RB", position)) %>% 
+  filter(!is.na(gsis_id))
+
+pass_df <-
+  nflreadr::load_pbp(start_year:2021) %>% 
+  # arrow::open_dataset("~/Documents/DynastyProcess/db/data/nflfastr_pbp") %>% 
+  filter(season >= start_year) %>% 
+  dplyr::collect() %>%
+  filter(play_type == "pass",
+         two_point_attempt == 0,
+         !str_detect(desc, "Aborted")) %>%
+  left_join(select(nflfastr_rosters, gsis_id, season, passer_position = position, passer_birth_date = birth_date),
+            by = c("passer_player_id" = "gsis_id", "season"),
+            na_matches = "never") %>%
+  left_join(select(nflfastr_rosters, gsis_id, season, receiver_position = position, receiver_birth_date = birth_date),
+            by = c("receiver_player_id" = "gsis_id", "season"),
+            na_matches = "never") %>%
+  filter(passer_position %in% c("QB","RB","WR","TE"),
+         receiver_position %in% c("QB","RB","WR","TE")) %>% 
+  mutate(
+    # New Calculated Columns
+    implied_total = case_when(posteam_type == "away" & spread_line<=0 ~ (total_line+spread_line)/2 - spread_line,
+                              posteam_type == "away" & spread_line>0 ~ (total_line-spread_line)/2,
+                              posteam_type == "home" & spread_line>0 ~ (total_line+spread_line)/2 - spread_line,
+                              posteam_type == "home" & spread_line<=0 ~ (total_line-spread_line)/2),
+    
+    # passer_age = get_age(passer_birth_date, game_date, dec = TRUE),
+    # receiver_age = get_age(receiver_birth_date, game_date, dec = TRUE),
+    relative_to_sticks = air_yards - ydstogo,
+    relative_to_endzone = air_yards - yardline_100,
+    
+    # New Categorical Columns
+    passer_position = if_else(passer_position != "QB", "nonQB", passer_position),
+    surface = if_else(surface == "grass", "grass", "turf"),
+    roof = if_else(roof %in% c("dome","closed"), "indoors", "outdoors"),
+    temp = case_when(roof %in% c("closed", "dome") ~ 68L, is.na(temp) ~ 60L, TRUE ~ temp),
+    wind = case_when(roof %in% c("closed", "dome") ~ 0L, is.na(wind) ~ 8L, TRUE ~ wind),
+    era = if_else(season >= 2018, "post2018", "pre2018"),
+    
+    # Categorical Variables
+    # yards_after_catch = replace_na(yards_after_catch, 0),
+    across(.cols = c(goal_to_go, shotgun, no_huddle, qb_hit, down, qtr),
+           .fns = as.factor),
+    
+    # Outcome Variables
+    complete_pass = factor(if_else(complete_pass == 1, "1", "0"), levels = c("1","0")),
+    pass_touchdown = factor(if_else(pass_touchdown == 1, "1", "0"), levels = c("1","0")),
+    first_down = factor(if_else(first_down == 1, "1", "0"), levels = c("1","0")),
+    interception = factor(if_else(interception == 1, "1", "0"), levels = c("1","0"))
+
+    # down = factor(down, levels = as.character(c(1:4)), ordered = TRUE),
+    # goal_to_go = factor(goal_to_go, levels = as.character(c(0,1))),
+    # shotgun = factor(shotgun, levels = as.character(c(0,1))),
+    # no_huddle = factor(no_huddle, levels = as.character(c(0,1))),
+
+    ) %>%
+  
+  filter(!is.na(air_yards), !is.na(pass_location)) %>%
+  
+  select(
+    season,
+    
+    # Outcome Variables
+    complete_pass,
+    yards_after_catch,
+    pass_touchdown,
+    first_down,
+    interception,
+    
+    # Continuous Monotonic Variables
+    relative_to_endzone, #Harder to pass closer as relative to endzone increases
+    wind,                #Harder to pass as wind increases
+    score_differential,  #Easier to complete passes as score diff increases
+    xpass,               #Harder to complete passes as xpass increases
+    vegas_wp,            #Easier to complete a pass as wp increases
+    total_line,          #Easier to complete a pass as scoring increases
+    implied_total,       #Easier to complete a pass as scoring increases
+    relative_to_sticks,  #Harder to complete a pass the further past the sticks
+    air_yards,           #Harder to complete a pass the further past the sticks
+    
+    # Continuous non-Monotonic Variables
+    yardline_100,        #Harder to pass as yardline decreases except at own goalline
+    half_seconds_remaining,
+    game_seconds_remaining,
+    ep,
+    fixed_drive,
+    ydstogo,
+    temp,
+    # passer_age,
+    # receiver_age,
+    
+    # Categorical Variables
+    era,
+    qb_hit,
+    posteam_type,
+    pass_location,
+    surface,
+    roof,
+    passer_position,
+    receiver_position,
+    qtr,
+    down,
+    goal_to_go,
+    shotgun,
+    no_huddle
+  )
+
+# corr_obj <- corrr::correlate(pass_df %>% select(where(is.numeric)))
+# pass_df %>% 
+#   GGally::ggpairs(mapping = aes(color = complete_pass))
+# pass_df %>%
+#   mutate(complete_pass = as.numeric(complete_pass)) %>%
+#   filter(wind <=40) %>%
+#   ggplot(aes(x = air_yards, y = wind, group = complete_pass, color = complete_pass)) +
+#   geom_point(alpha = 0.5) +
+#   geom_smooth() +
+#   theme_minimal()
+# 
+# pass_df %>% 
+#   mutate(complete_pass = as.numeric(complete_pass)) %>% 
+#   filter(wind <=40) %>% 
+#   ggplot(aes(x = air_yards, y = relative_to_sticks, group = complete_pass, color = complete_pass)) +
+#   geom_point(alpha = 0.5) +
+#   ylim(c(-10,10)) +
+#   xlim(-5,20) +
+#   geom_smooth() +
+#   theme_minimal() +
+#   facet_wrap(~down)
+# 
+# pass_df %>%
+#   mutate(complete_pass = as.numeric(complete_pass)) %>%
+#   filter(wind <=40) %>%
+#   ggplot(aes(x = vegas_wp, y = complete_pass)) +
+#   geom_point(alpha = 0.5) +
+#   geom_smooth() +
+#   theme_minimal()
+# 
+# pass_df %>%
+#   group_by(wind) %>%
+#   summarise(n(),
+#             mean(air_yards, na.rm = TRUE),
+#             mean(as.numeric(yards_after_catch), na.rm = TRUE),
+#             mean(complete_pass)) %>%
+#   view()
+
+
+```
+
+## Train Test Split Data 
+```{r}
+set.seed(815)
+
+pass_train <-
+  pass_df %>%
+  filter(season <= 2020)
+
+training_resamples <-
+  pass_train %>%
+  vfold_cv(v = 5)
+
+pass_test <-
+  pass_df %>%
+  filter(season > 2020)
+
+```
+
+# Pass completion
+```{r}
+
+#Create recipe
+pass_completion_recipe <- 
+  recipe(complete_pass ~ ., data = pass_train) %>%
+  update_role(season, new_role = "id") %>% 
+  step_rm(c(first_down, yards_after_catch, interception, pass_touchdown)) %>% 
+  # step_impute_median(all_numeric_predictors()) %>%
+  # step_unknown(all_nominal_predictors()) %>% 
+  step_dummy(c(pass_location, receiver_position, qtr, down), one_hot = TRUE) %>% 
+  step_dummy(all_nominal_predictors(), one_hot = FALSE)
+
+prepped <- prep(pass_completion_recipe)
+juiced <- juice(prepped)
+baked <- bake(prepped, pass_train)
+levels(baked$complete_pass)
+
+# Boosted Decision Tree
+pass_completion_boost <- 
+   boost_tree(mode = "classification",
+              mtry = tune(),  
+              trees = tune(),
+              min_n = tune(),
+              tree_depth = tune(),
+              learn_rate = tune(),
+              loss_reduction = tune(),
+              sample_size = tune()) %>% 
+  set_engine(engine = "xgboost",
+             eval_metric='logloss',
+             monotone_constraints = c(-1, #relative_to_endzone
+                                      -1, #wind
+                                       1, #score_differential
+                                      -1, #xpass
+                                       1, #vegas_wp
+                                       1, #total_line
+                                       1, #implied_total
+                                      -1, #relative_to_sticks
+                                      -1, #air_yards
+                                      rep(0, 32)))
+
+# Workflow Sets
+pass_completion_wf <- workflow(pass_completion_recipe, pass_completion_boost)
+
+new_params <- 
+  parameters(pass_completion_wf) %>%
+  update(mtry = mtry(range = c(2,29)),
+         min_n = min_n(range = c(100,2000)),
+         tree_depth = tree_depth(range = c(2,12)),
+         learn_rate = learn_rate(range = c(-5, -0.5), trans = scales::log10_trans()))
+
+# map(rush_workflowsets$option, ~ .x$param_info$object)
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 20,
+    uncertain = 30,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+# pass_completion_tune_save <- pass_completion_tune
+# pass_completion_tune <- readRDS("../models_xgboost/pass_completion_tune.RDS")
+
+pass_completion_tune <-
+  tune_bayes(
+    pass_completion_wf,
+    resamples = training_resamples,
+    iter = 100,
+    param_info = new_params,
+    metrics = metric_set(mn_log_loss),
+    initial = pass_completion_tune,
+    # initial = 20,
+    control = ctrl_bayes
+  )
+
+saveRDS(pass_completion_tune, "../models_xgboost/pass_completion_tune.RDS")
+
+#Model Eval
+res_grid_unnest <- 
+  pass_completion_tune %>% 
+  collect_metrics()
+
+autoplot(pass_completion_tune, 
+         rank_metric = "mn_log_loss",
+         metric = "mn_log_loss",
+         select_best = FALSE) +
+  theme_minimal()
+
+best_model <- 
+  select_best(pass_completion_tune, metric = "mn_log_loss")
+
+finalize_pass_completion <- 
+  finalize_workflow(pass_completion_wf, best_model)
+
+fit_pass_completion <- fit(finalize_pass_completion, pass_train)
+
+pass_test <-
+  pass_test %>% 
+  bind_cols(predict(fit_pass_completion, pass_test, type = "prob")) %>% 
+  rename(pass_completion_exp = .pred_1) %>% 
+  select(-.pred_0)
+
+mn_log_loss_vec(pass_test$complete_pass, pass_test$pass_completion_exp)
+
+# saveRDS(butcher(fit_pass_completion), "../models_xgboost/fit_pass_completion.RDS")
+saveRDS(fit_pass_completion, "../models_xgboost/fit_pass_completion.RDS")
+
+pass_completion_explainer <-
+  explain_tidymodels(
+    fit_pass_completion,
+    data = select(pass_train, -complete_pass),
+    y =  pass_train %>% mutate(complete_pass = if_else(complete_pass == "1", 1L, 0L)) %>% pull(complete_pass)
+  )
+
+plot(feature_importance(pass_completion_explainer))
+
+plot(model_profile(pass_completion_explainer, variables = c("vegas_wp"), groups = "qb_hit", N = 500))
+```
+
+# Predicting Rec Yards
+```{r}
+set.seed(815)
+
+fit_pass_completion <- readRDS("../models_xgboost/fit_pass_completion.RDS")
+
+pass_train <-
+  pass_train %>% 
+  bind_cols(predict(fit_pass_completion, pass_train, type = "prob")) %>% 
+  rename(pass_completion_exp = .pred_1) %>% 
+  select(-.pred_0) %>% 
+  filter(complete_pass == 1)
+
+training_resamples <-
+  pass_train %>%
+  vfold_cv(v = 5)
+
+#Create recipe
+pass_yac_recipe <- 
+  recipe(yards_after_catch ~ ., data = pass_train) %>%
+  update_role(season, new_role = "id") %>% 
+  step_rm(c(first_down, complete_pass, interception, pass_touchdown)) %>% 
+  step_dummy(c(pass_location, receiver_position, qtr, down), one_hot = TRUE) %>% 
+  step_dummy(all_nominal_predictors(), one_hot = FALSE)
+
+prepped <- prep(pass_yac_recipe)
+juiced <- juice(prepped)
+
+# pass_train %>%
+#   ggplot(aes(x = pass_completion_exp, y = yards_after_catch)) +
+#   geom_point(alpha = 0.5) +
+#   geom_smooth() +
+#   theme_minimal()
+
+# Boosted Decision Tree
+pass_yac_boost <- 
+   boost_tree(mode = "regression",
+              # engine = "xgboost",
+              mtry = tune(),  
+              trees = tune(),
+              min_n = tune(),
+              tree_depth = tune(),
+              learn_rate = tune(),
+              loss_reduction = tune(),
+              sample_size = tune()) %>% 
+  set_engine(engine = "xgboost",
+             # eval_metric='mlogloss',
+             monotone_constraints = c(-1, #relative_to_endzone
+                                       0, #wind
+                                       1, #score_differential
+                                      -1, #xpass
+                                       1, #vegas_wp
+                                       1, #total_line
+                                       1, #implied_total
+                                      -1, #relative_to_sticks
+                                      -1, #air_yards
+                                       rep(0, 7),
+                                       1, #pass_completion_exp
+                                       rep(0, 25)))
+
+# Workflow Sets
+pass_yac_wf <- workflow(pass_yac_recipe, pass_yac_boost)
+
+new_params <- 
+  parameters(pass_yac_wf) %>%
+  update(mtry = mtry(range = c(2,30)),
+         min_n = min_n(range = c(100,2000)),
+         tree_depth = tree_depth(range = c(2,12)),
+         learn_rate = learn_rate(range = c(-5, -0.5), trans = scales::log10_trans()))
+
+# map(rush_workflowsets$option, ~ .x$param_info$object)
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 20,
+    uncertain = 10,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+pass_yac_tune <-
+  tune_bayes(
+    pass_yac_wf,
+    resamples = training_resamples,
+    iter = 100,
+    param_info = new_params,
+    metrics = metric_set(rmse),
+    initial = 20,
+    control = ctrl_bayes
+  )
+
+saveRDS(pass_yac_tune, "../models_xgboost/pass_yac_tune.RDS")
+
+best_model <- select_best(pass_yac_tune, metric = "rmse")
+
+finalize_pass_yac <- finalize_workflow(pass_yac_wf, best_model)
+
+fit_pass_yac <- fit(finalize_pass_yac, pass_train)
+
+saveRDS(fit_pass_yac, "../models_xgboost/fit_pass_yac.RDS")
+
+#Model Eval
+res_grid_unnest <- 
+  pass_yac_tune %>% 
+  collect_metrics()
+
+autoplot(pass_yac_tune, 
+         rank_metric = "rmse",
+         metric = "rmse",
+         select_best = FALSE) +
+  theme_minimal()
+
+# pass_test <-
+#   pass_test %>% 
+#   bind_cols(predict(fit_pass_yac, pass_test)) %>% 
+#   rename(yards_after_catch_exp = .pred)
+
+pass_yac_explainer <-
+  explain_tidymodels(
+    fit_pass_yac,
+    data = select(pass_train, -yards_after_catch),
+    y =  pass_train$yards_after_catch)
+
+plot(feature_importance(pass_yac_explainer))
+
+plot(model_profile(pass_yac_explainer, variables = c("xpass"), N = 500))
+
+
+```
+
+
+# Pass TDs
+```{r}
+fit_pass_yac <- readRDS("../models_xgboost/fit_pass_yac.RDS")
+
+pass_train <-
+  pass_train %>% 
+  bind_cols(predict(fit_pass_yac, pass_train)) %>%
+  rename(yards_after_catch_exp = .pred) %>%
+  mutate(yardline_exp = yardline_100 - air_yards - yards_after_catch_exp)
+
+training_resamples <-
+  pass_train %>%
+  vfold_cv(v = 5)
+
+#Create recipe
+pass_td_recipe <- 
+  recipe(pass_touchdown ~ ., data = pass_train) %>%
+  update_role(season, new_role = "id") %>% 
+  step_rm(c(first_down, complete_pass, interception, yards_after_catch)) %>% 
+  step_dummy(c(pass_location, receiver_position, qtr, down), one_hot = TRUE) %>% 
+  step_dummy(all_nominal_predictors(), one_hot = FALSE)
+
+# prepped <- prep(pass_td_recipe)
+# juiced <- juice(prepped)
+# baked <- bake(prepped, pass_train)
+# levels(baked$pass_complete)
+
+# Boosted Decision Tree
+pass_td_boost <- 
+   boost_tree(mode = "classification",
+              mtry = tune(),  
+              trees = tune(),
+              min_n = tune(),
+              tree_depth = tune(),
+              learn_rate = tune(),
+              loss_reduction = tune(),
+              sample_size = tune()) %>% 
+  set_engine(engine = "xgboost",
+             eval_metric='logloss',
+             monotone_constraints = c(-1, #relative_to_endzone
+                                      -1, #wind
+                                       1, #score_differential
+                                      -1, #xpass
+                                       1, #vegas_wp
+                                       1, #total_line
+                                       1, #implied_total
+                                      -1, #relative_to_sticks
+                                      -1, #air_yards
+                                       rep(0, 7),
+                                       1, #pass_completion_exp
+                                       1, #yards_after_catch_exp
+                                      -1, #yardline_exp
+                                       rep(0, 25)))
+
+# Workflow Sets
+pass_td_wf <- workflow(pass_td_recipe, pass_td_boost)
+
+new_params <- 
+  parameters(pass_td_wf) %>%
+  update(mtry = mtry(range = c(2,32)),
+         min_n = min_n(range = c(100,2000)),
+         tree_depth = tree_depth(range = c(2,12)),
+         learn_rate = learn_rate(range = c(-5, -0.5), trans = scales::log10_trans()))
+
+# map(rush_workflowsets$option, ~ .x$param_info$object)
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 40,
+    uncertain = 20,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+pass_td_tune <-
+  tune_bayes(
+    pass_td_wf,
+    resamples = training_resamples,
+    iter = 200,
+    param_info = new_params,
+    metrics = metric_set(mn_log_loss),
+    # initial = pass_td_tune,
+    initial = 20,
+    control = ctrl_bayes
+  )
+
+saveRDS(pass_td_tune, "../models_xgboost/pass_td_tune.RDS")
+
+#Model Eval
+res_grid_unnest <- 
+  pass_td_tune %>% 
+  collect_metrics()
+
+autoplot(pass_td_tune, 
+         rank_metric = "mn_log_loss",
+         metric = "mn_log_loss",
+         select_best = FALSE) +
+  theme_minimal()
+
+best_model <- 
+  select_best(pass_td_tune, metric = "mn_log_loss")
+
+finalize_pass_td <- 
+  finalize_workflow(pass_td_wf, best_model)
+
+fit_pass_td <- fit(finalize_pass_td, pass_train)
+
+saveRDS(fit_pass_td, "../models_xgboost/fit_pass_td.RDS")
+
+# pass_test <-
+#   pass_test %>% 
+#   bind_cols(predict(fit_pass_td, pass_test, type = "prob")) %>% 
+#   rename(rec_td_exp = .pred_1) %>% 
+#   select(-.pred_0)
+# 
+# mn_log_loss_vec(pass_test$score, pass_test$rec_td_exp)
+
+# pass_train %>% 
+#   group_by(pass_touchdown_exp > pass_completion_exp, yardline_100 == air_yards) %>% 
+#   summarise(n(), 
+#             mean(pass_touchdown == "1"), mean(complete_pass == "1"),
+#             mean(pass_touchdown_exp), mean(pass_completion_exp))
+
+pass_td_explainer <-
+  explain_tidymodels(
+    fit_pass_td,
+    data = select(pass_train, -pass_touchdown),
+    y = pass_train %>% mutate(pass_touchdown = if_else(pass_touchdown == "1", 1L, 0L)) %>% pull(pass_touchdown))
+
+plot(feature_importance(pass_td_explainer))
+
+plot(model_profile(pass_td_explainer, variables = c("yardline_100"), N = 500))
+```
+
+
+# Pass FDs
+```{r}
+pass_train <-
+  pass_train %>% 
+  bind_cols(predict(fit_pass_td, pass_train, type = "prob")) %>% 
+  rename(pass_touchdown_exp = .pred_1) %>% 
+  select(-.pred_0)
+
+training_resamples <-
+  pass_train %>%
+  vfold_cv(v = 5)
+
+#Create recipe
+pass_fd_recipe <- 
+  recipe(first_down ~ ., data = pass_train) %>%
+  update_role(season, new_role = "id") %>% 
+  step_rm(c(pass_touchdown, complete_pass, interception, yards_after_catch)) %>% 
+  step_dummy(c(pass_location, receiver_position, qtr, down), one_hot = TRUE) %>% 
+  step_dummy(all_nominal_predictors(), one_hot = FALSE)
+
+# prepped <- prep(pass_completion_recipe)
+# juiced <- juice(prepped)
+# baked <- bake(prepped, pass_train)
+# levels(baked$pass_complete)
+
+# pass_train %>%
+#   mutate(first_down = if_else(first_down == "1", 1L, 0L)) %>% 
+#   ggplot(aes(x = xpass, y = first_down)) +
+#   geom_point(alpha = 0.5) +
+#   geom_smooth() +
+#   theme_minimal()
+
+# Boosted Decision Tree
+pass_fd_boost <- 
+   boost_tree(mode = "classification",
+              mtry = tune(),  
+              trees = tune(),
+              min_n = tune(),
+              tree_depth = tune(),
+              learn_rate = tune(),
+              loss_reduction = tune(),
+              sample_size = tune()) %>% 
+  set_engine(engine = "xgboost",
+             eval_metric='logloss')
+
+# Workflow Sets
+pass_fd_wf <- workflow(pass_fd_recipe, pass_fd_boost)
+
+new_params <- 
+  parameters(pass_fd_wf) %>%
+  update(mtry = mtry(range = c(2,33)),
+         min_n = min_n(range = c(100,2000)),
+         tree_depth = tree_depth(range = c(2,12)),
+         learn_rate = learn_rate(range = c(-5, -0.5), trans = scales::log10_trans()))
+
+# map(rush_workflowsets$option, ~ .x$param_info$object)
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 30,
+    uncertain = 25,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+# pass_completion_tune_save <- pass_completion_tune
+
+pass_fd_tune <-
+  tune_bayes(
+    pass_fd_wf,
+    resamples = training_resamples,
+    iter = 100,
+    param_info = new_params,
+    metrics = metric_set(mn_log_loss),
+    initial = 20,
+    control = ctrl_bayes
+  )
+
+saveRDS(pass_fd_tune, "../models_xgboost/pass_fd_tune.RDS")
+
+#Model Eval
+res_grid_unnest <- 
+  pass_fd_tune %>% 
+  collect_metrics()
+
+autoplot(pass_fd_tune, 
+         rank_metric = "mn_log_loss",
+         metric = "mn_log_loss",
+         select_best = FALSE) +
+  theme_minimal()
+
+best_model <- 
+  select_best(pass_fd_tune, metric = "mn_log_loss")
+
+finalize_pass_fd <- 
+  finalize_workflow(pass_fd_wf, best_model)
+
+fit_pass_fd <- fit(finalize_pass_fd, pass_train)
+
+saveRDS(fit_pass_fd, "../models_xgboost/fit_pass_fd.RDS")
+
+pass_test <-
+  pass_test %>% 
+  bind_cols(predict(fit_pass_td, pass_test, type = "prob")) %>% 
+  rename(rec_td_exp = .pred_1) %>% 
+  select(-.pred_0)
+
+pass_train <-
+  pass_train %>% 
+  bind_cols(predict(fit_pass_td, pass_train, type = "prob")) %>% 
+  rename(rec_td_exp = .pred_1) %>% 
+  select(-.pred_0)
+
+
+mn_log_loss_vec(pass_test$score, pass_test$rec_td_exp)
+
+pass_td_explainer <-
+  explain_tidymodels(
+    fit_pass_td,
+    data = select(pass_train, -c(score, rec_td_exp)),
+    y = as.numeric(pass_train$score))
+
+plot(feature_importance(pass_td_explainer))
+
+
+```
+
+# Pass Interceptions
+```{r}
+pass_train <-
+  pass_train %>% 
+  bind_cols(predict(fit_pass_fd, pass_train, type = "prob")) %>% 
+  rename(pass_first_down_exp = .pred_1) %>% 
+  select(-.pred_0)
+
+training_resamples <-
+  pass_train %>%
+  vfold_cv(v = 5)
+
+#Create recipe
+pass_int_recipe <- 
+  recipe(interception ~ ., data = pass_train) %>%
+  update_role(season, new_role = "id") %>% 
+  step_rm(c(pass_touchdown, complete_pass, first_down, yards_after_catch)) %>% 
+  step_dummy(c(pass_location, receiver_position, qtr, down), one_hot = TRUE) %>% 
+  step_dummy(all_nominal_predictors(), one_hot = FALSE)
+
+# prepped <- prep(pass_completion_recipe)
+# juiced <- juice(prepped)
+# baked <- bake(prepped, pass_train)
+# levels(baked$pass_complete)
+
+# Boosted Decision Tree
+pass_int_boost <- 
+   boost_tree(mode = "classification",
+              mtry = tune(),  
+              trees = tune(),
+              min_n = tune(),
+              tree_depth = tune(),
+              learn_rate = tune(),
+              loss_reduction = tune(),
+              sample_size = tune()) %>% 
+  set_engine(engine = "xgboost",
+             eval_metric='logloss')
+
+# Workflow Sets
+pass_int_wf <- workflow(pass_int_recipe, pass_int_boost)
+
+new_params <- 
+  parameters(pass_int_wf) %>%
+  update(mtry = mtry(range = c(2,33)),
+         min_n = min_n(range = c(100,2000)),
+         tree_depth = tree_depth(range = c(2,12)),
+         learn_rate = learn_rate(range = c(-5, -0.5), trans = scales::log10_trans()))
+
+# map(rush_workflowsets$option, ~ .x$param_info$object)
+
+# Bayesian Tuning
+ctrl_bayes <-
+  control_bayes(
+    verbose = TRUE,
+    no_improve = 40,
+    uncertain = 30,
+    seed = 815,
+    save_pred = TRUE,
+    parallel_over = 'everything',
+    save_workflow = TRUE
+  )
+
+# pass_completion_tune_save <- pass_completion_tune
+
+pass_int_tune <-
+  tune_bayes(
+    pass_int_wf,
+    resamples = training_resamples,
+    iter = 100,
+    param_info = new_params,
+    metrics = metric_set(mn_log_loss),
+    initial = 10,
+    control = ctrl_bayes
+  )
+
+saveRDS(pass_int_tune, "../models_xgboost/pass_int_tune.RDS")
+
+#Model Eval
+res_grid_unnest <- 
+  pass_int_tune %>% 
+  collect_metrics()
+
+autoplot(pass_int_tune, 
+         rank_metric = "mn_log_loss",
+         metric = "mn_log_loss",
+         select_best = FALSE) +
+  theme_minimal()
+
+best_model <- 
+  select_best(pass_int_tune, metric = "mn_log_loss")
+
+finalize_pass_int <- 
+  finalize_workflow(pass_int_wf, best_model)
+
+fit_pass_int <- fit(finalize_pass_int, pass_train)
+
+saveRDS(fit_pass_int, "../models_xgboost/fit_pass_int.RDS")
+# 
+# pass_test <-
+#   pass_test %>% 
+#   bind_cols(predict(fit_pass_td, pass_test, type = "prob")) %>% 
+#   rename(rec_td_exp = .pred_1) %>% 
+#   select(-.pred_0)
+# 
+# pass_train <-
+#   pass_train %>% 
+#   bind_cols(predict(fit_pass_td, pass_train, type = "prob")) %>% 
+#   rename(rec_td_exp = .pred_1) %>% 
+#   select(-.pred_0)
+# 
+# 
+# mn_log_loss_vec(pass_test$score, pass_test$rec_td_exp)
+ 
+pass_int_explainer <-
+  explain_tidymodels(
+    fit_pass_int,
+    data = select(pass_train, -interception),
+    y = as.numeric(pass_train$interception))
+
+plot(feature_importance(pass_int_explainer))
+
+plot(model_profile(pass_int_explainer, variables = c("rec_fd_exp", "distance_to_sticks", "pass_completion_exp",
+                                                     "air_yards"),
+                   groups = "pass_location", N = 1000))
+
+
+```

@@ -93,7 +93,8 @@ pass_df <-
                                          is.na(two_point_conv_result) & str_detect(desc, "ATTEMPT SUCCEEDS") ~ 1,
                                          TRUE ~ 0),
          score = if_else(pass_touchdown == 1 | two_point_converted == 1, 1, 0),
-         receiving_yards = case_when(is.na(receiving_yards) & two_point_attempt == 1 & two_point_converted == 1 ~ yardline_100,
+         receiving_yards = case_when(is.na(receiving_yards) & two_point_attempt == 1 &
+                                       two_point_converted == 1 ~ yardline_100,
                                      is.na(receiving_yards) & two_point_attempt == 1 & two_point_converted == 0 ~ 0,
                                      complete_pass == 0 ~ 0,
                                      TRUE ~ receiving_yards),
@@ -267,7 +268,7 @@ pass_test <-
 #Create recipe
 pass_completion_recipe <- 
   recipe(pass_complete ~ ., data = pass_train) %>%
-  step_rm(c(season, receiving_yards, score, first_down, receiving_fantasy_points, passing_fantasy_points)) %>% 
+  step_rm(c(season, receiving_yards, score, first_down, receiving_fantasy_points, passing_fantasy_points, interception)) %>% 
   step_impute_median(all_numeric_predictors()) %>%
   step_unknown(all_nominal_predictors())
 
@@ -410,7 +411,7 @@ training_resamples <-
 #Create recipe
 pass_yards_recipe <- 
   recipe(receiving_yards ~ ., data = pass_train) %>%
-  step_rm(c(pass_complete, score, first_down, receiving_fantasy_points, passing_fantasy_points)) %>% 
+  step_rm(c(pass_complete, score, first_down, receiving_fantasy_points, passing_fantasy_points, interception)) %>% 
   step_impute_median(all_numeric_predictors()) %>%
   step_unknown(all_nominal_predictors())
 
@@ -514,7 +515,7 @@ training_resamples <-
 #Create recipe
 pass_td_recipe <- 
   recipe(score ~ ., data = pass_train) %>%
-  step_rm(c(receiving_yards, pass_complete, first_down, receiving_fantasy_points, passing_fantasy_points)) %>% 
+  step_rm(c(receiving_yards, pass_complete, first_down, receiving_fantasy_points, passing_fantasy_points, interception)) %>% 
   step_impute_median(all_numeric_predictors()) %>%
   step_unknown(all_nominal_predictors())
 
@@ -631,7 +632,7 @@ training_resamples <-
 #Create recipe
 pass_fd_recipe <- 
   recipe(first_down ~ ., data = pass_train) %>%
-  step_rm(c(receiving_yards, pass_complete, score, receiving_fantasy_points, passing_fantasy_points)) %>% 
+  step_rm(c(receiving_yards, pass_complete, score, receiving_fantasy_points, passing_fantasy_points, interception)) %>% 
   step_impute_median(all_numeric_predictors()) %>%
   step_unknown(all_nominal_predictors())
 

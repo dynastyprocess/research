@@ -252,7 +252,10 @@ pass_df <-
                    week,
                    game_id,
                    play_id = as.factor(play_id),
-                   play_description = desc, #qtr, yardline_100, drive, two_point_attempt, distance_to_endzone,
+                   play_description = desc,
+                   
+                   # cp, xyac_mean_yardage, xyac_median_yardage,
+                   # qtr, yardline_100, drive, two_point_attempt, distance_to_endzone,
                    # fantasy_player_id,
                    # full_name,
                    # position,
@@ -266,7 +269,6 @@ pass_df <-
                    rec.full_name = receiver_full_name,
                    rec.position = receiver_position,
                    
-                   posteam,
                    attempt = 1,
                    air_yards,
                    complete_pass,
@@ -285,12 +287,36 @@ pass_df <-
                    interception_exp = passing_int_exp,
                    fumble_lost)
 
+# rmse_vec(pass_df$cp, pass_df$complete_pass)
+# rmse_vec(pass_df$complete_pass_exp, pass_df$complete_pass)
+# corrr::correlate(pass_df$cp, pass_df$complete_pass)
+# corrr::correlate(pass_df$complete_pass_exp, pass_df$complete_pass)
+# 
+# pass_df %>% 
+#   pivot_longer(cols = c(cp, complete_pass_exp, complete_pass)) %>% 
+#   ggplot(aes(x = air_yards, y = value, color = name, group = name)) +
+#   geom_point() +
+#   geom_smooth(se = FALSE) +
+#   theme_minimal()
+# 
+# pass_df %>% 
+#   ggplot(aes(x = cp, y = complete_pass_exp)) +
+#   geom_point() +
+#   geom_abline(color = "red") + 
+#   geom_smooth(se = FALSE) +
+#   theme_minimal() +
+#   facet_wrap(~complete_pass)
+# 
+# pass_df %>% 
+#   filter(complete_pass_exp <= 0.10) %>% 
+#   view()
+
 # Investigate Josh Allen
-# josh_allen <- pass_df %>% 
-#   filter(pass.full_name == "Josh Allen", week == 3) %>% 
-#   select(qtr, play_description, pass.full_name, rec.full_name, yardline_100, air_yards, distance_to_endzone, drive,
+# josh_allen <- pass_df %>%
+#   filter(pass.full_name == "Jameis Winston", week == 7) %>%
+#   select(play_description, pass.full_name, rec.full_name, air_yards,
 #          complete_pass, complete_pass_exp, touchdown, touchdown_exp) %>%
-#   mutate(across(contains("exp"), ~round(.x, 3))) %>% 
+#   mutate(across(contains("exp"), ~round(.x, 3))) %>%
 #   view()
 
 pass_df_pivot <- 
@@ -355,7 +381,7 @@ snaps <- load_snap_counts() %>%
   
 
   
-arrow::write_parquet(combined_df, "expected_points_2021.pdata")
+# arrow::write_parquet(combined_df, "expected_points_2021.pdata")
 
 arrow::write_parquet(snaps, "expected_points_2021.pdata")
               
