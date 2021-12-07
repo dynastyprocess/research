@@ -19,9 +19,9 @@ get_age <- function(from_date,to_date = lubridate::now(),dec = FALSE){
 }
 
 
-filenames <- list.files("./models", pattern="fit", full.names=TRUE)
-obj_names <- str_remove_all(filenames,"./models/|.RDS")
-models <- map(filenames, readRDS) %>% set_names(obj_names)
+# filenames <- list.files("./models", pattern="fit", full.names=TRUE)
+# obj_names <- str_remove_all(filenames,"./models/|.RDS")
+# models <- map(filenames, readRDS) %>% set_names(obj_names)
 
 filenames_xgboost <- list.files("./models_xgboost", pattern="fit", full.names=TRUE)
 obj_names_xgboost <- str_remove_all(filenames_xgboost,"./models_xgboost/|.RDS")
@@ -50,72 +50,73 @@ rush_df <-
   dplyr::filter(play_type == "run", !str_detect(desc, "kneel|Aborted")) %>%
   dplyr::left_join(nflfastr_rosters, by = c("fantasy_player_id" = "gsis_id", "season"), na_matches = "never") %>%
   dplyr::filter(position %in% c("QB","RB","WR","TE")) %>%
-  dplyr::mutate(game_month = month(game_date),
-                game_month = if_else(game_month < 3, 12, game_month),
-                game_week = week(game_date),
-                game_week = if_else(game_week <= 30, 53, game_week),
-                game_wday = as.character(wday(game_date, label = TRUE)),
-                game_wday = case_when(game_wday %in% c("Tue","Wed","Fri","Sat") ~ "Other", TRUE ~ game_wday),
-                game_time = hour(hms(start_time)),
-                implied_total = case_when(posteam_type == "away" & spread_line<=0 ~ (total_line+spread_line)/2 - spread_line,
-                                          posteam_type == "away" & spread_line>0 ~ (total_line-spread_line)/2,
-                                          posteam_type == "home" & spread_line>0 ~ (total_line+spread_line)/2 - spread_line,
-                                          posteam_type == "home" & spread_line<=0 ~ (total_line-spread_line)/2),
-                rusher_age = get_age(birth_date, game_date, dec = TRUE),
-                #Two Point Conversion fixes
-                two_point_converted = case_when(two_point_conv_result == "success" ~ 1,
-                                                is.na(two_point_conv_result) & str_detect(desc, "ATTEMPT SUCCEEDS") ~ 1,
-                                                TRUE ~ 0),
-                score = if_else(rush_touchdown == 1 | two_point_converted == 1, 1, 0),
-                rushing_yards = case_when(is.na(rushing_yards) & two_point_attempt == 1 & two_point_converted == 1 ~ yardline_100,
-                                          is.na(rushing_yards) & two_point_attempt == 1 & two_point_converted == 0 ~ 0 ,
-                                          TRUE ~ rushing_yards),
-                down = if_else(two_point_attempt == 1, 4, down),
-                surface = if_else(surface == "grass", "grass", "turf"),
-                run_location = case_when(!is.na(run_location) ~ run_location,
-                                         str_detect(desc, " left") ~ "left",
-                                         str_detect(desc, " right") ~ "right",
-                                         str_detect(desc, " middle") ~ "middle",
-                                         TRUE ~ "unk"),
-                run_gap = case_when(!is.na(run_gap) ~ run_gap,
-                                    run_location == "middle" ~ "guard",
-                                    str_detect(desc, " end") ~ "end",
-                                    str_detect(desc, " tackle") ~ "tackle",
-                                    str_detect(desc, " guard") ~ "guard",
-                                    str_detect(desc, " middle") ~ "guard",
-                                    TRUE ~ "unk"),
-                temp = case_when(roof %in% c("closed", "dome") ~ 68L,
-                                 is.na(temp) ~ 60L,
-                                 TRUE ~ temp),
-                wind = case_when(roof %in% c("closed", "dome") ~ 0L,
-                                 is.na(wind) ~ 8L,
-                                 TRUE ~ wind),
-                rushing_fantasy_points = 6*rush_touchdown + 2*two_point_converted + 0.1*rushing_yards - 2*fumble_lost,
-                season = factor(season, levels = as.character(c(2001:2020)), ordered = TRUE),
-                week = factor(week, levels = as.character(c(1:21)), ordered = TRUE),
-                game_month = factor(game_month, levels = as.character(c(9:12)), ordered = TRUE),
-                game_week = factor(game_week, levels = as.character(c(36:53)), ordered = TRUE),
-                game_time = factor(game_time, levels = as.character(c(9:23)), ordered = TRUE),
-                qtr = factor(qtr, levels = as.character(c(1:6)), ordered = TRUE),
-                down = factor(down, levels = as.character(c(1:4)), ordered = TRUE),
-                goal_to_go = factor(goal_to_go, levels = as.character(c(0,1))),
-                shotgun = factor(shotgun, levels = as.character(c(0,1))),
-                no_huddle = factor(no_huddle, levels = as.character(c(0,1))),
-                qb_dropback = factor(qb_dropback, levels = as.character(c(0,1))),
-                qb_scramble = factor(qb_scramble, levels = as.character(c(0,1))),
-                two_point_attempt = factor(two_point_attempt, levels = as.character(c(0,1))),
-                score = factor(score, levels = as.character(c(0,1))),
-                first_down = factor(first_down, levels = as.character(c(0,1))),
-                run_gap_dir = paste(run_location, run_gap, sep = "_")) %>%
+  dplyr::mutate(
+    # New Calculated Columns
+    implied_total = dplyr::case_when(
+      posteam_type == "away" & spread_line<=0 ~ (total_line+spread_line)/2 - spread_line,
+      posteam_type == "away" & spread_line>0 ~ (total_line-spread_line)/2,
+      posteam_type == "home" & spread_line>0 ~ (total_line+spread_line)/2 - spread_line,
+      posteam_type == "home" & spread_line<=0 ~ (total_line-spread_line)/2),
+    
+    # New Categorical Columns
+    surface = dplyr::if_else(surface == "grass", "grass", "turf"),
+    roof = dplyr::if_else(roof %in% c("dome","closed"), "indoors", "outdoors"),
+    temp = dplyr::case_when(roof %in% c("closed", "dome") ~ 68L, is.na(temp) ~ 60L, TRUE ~ temp),
+    wind = dplyr::case_when(roof %in% c("closed", "dome") ~ 0L, is.na(wind) ~ 8L, TRUE ~ wind),
+    era = dplyr::if_else(season >= 2018, "post2018", "pre2018"),
+    
+    # Cleaning 2pt attempts
+    down = dplyr::if_else(two_point_attempt == 1, 4, down),
+    rushing_yards = dplyr::if_else(two_point_attempt == 1, 0, rushing_yards),
+    xpass = dplyr::if_else(two_point_attempt == 1, 0.75, xpass),
+    pass_location = dplyr::case_when(!is.na(pass_location) ~ pass_location,
+                                     stringr::str_detect(desc, " left") ~ "left",
+                                     stringr::str_detect(desc, " right") ~ "right",
+                                     stringr::str_detect(desc, " middle") ~ "middle",
+                                     TRUE ~ "unk"),
+    yards_after_catch = dplyr::if_else(two_point_attempt == 1, 0, xpass),
+    air_yards = dplyr::if_else(two_point_attempt == 1, yardline_100, air_yards),
+    two_point_converted = dplyr::case_when(two_point_conv_result == "success" ~ 1,
+                                           is.na(two_point_conv_result) & stringr::str_detect(desc, "ATTEMPT SUCCEEDS") ~ 1,
+                                           TRUE ~ 0),
+    
+    # Categorical Variables
+    dplyr::across(
+      .cols = c(goal_to_go, shotgun, no_huddle, qb_hit, down, qtr, qb_dropback, qb_scramble),
+      .fns = as.factor),
+    # Categorical Variables
+    run_location = dplyr::case_when(
+      !is.na(run_location) ~ run_location,
+      stringr::str_detect(desc, " left") ~ "left",
+      stringr::str_detect(desc, " right") ~ "right",
+      stringr::str_detect(desc, " middle") ~ "middle",
+      TRUE ~ "unk"),
+    run_gap = dplyr::case_when(
+      !is.na(run_gap) ~ run_gap,
+      run_location == "middle" ~ "guard",
+      stringr::str_detect(desc, " end") ~ "end",
+      stringr::str_detect(desc, " tackle") ~ "tackle",
+      stringr::str_detect(desc, " guard") ~ "guard",
+      stringr::str_detect(desc, " middle") ~ "guard",
+      TRUE ~ "unk"),
+    run_gap_dir = paste(run_location, run_gap, sep = "_"),
+    
+    # Outcome Variables
+    rush_touchdown = factor(dplyr::if_else(rush_touchdown == 1, "1", "0"), levels = c("1","0")),
+    first_down = factor(dplyr::if_else(first_down == 1, "1", "0"), levels = c("1","0"))
+    
+                ) %>%
   dplyr::filter(run_gap_dir %in% c("left_end", "left_tackle", "left_guard", "middle_guard",
                                    "right_guard", "right_tackle", "right_end")) %>%
-  dplyr::bind_cols(predict(models$fit_rush_yards, new_data = .)) %>% 
+  dplyr::bind_cols(predict(models_xgboost$fit_rush_yards, new_data = .)) %>% 
   dplyr::rename(rushing_yards_exp = .pred) %>%
-  dplyr::bind_cols(predict(models$fit_rush_tds, new_data = ., type = "prob")) %>%
+  dplyr::bind_cols(predict(models_xgboost$fit_rush_tds, new_data = ., type = "prob")) %>%
   dplyr::rename(rushing_td_exp = .pred_1) %>%
   dplyr::select(-.pred_0) %>% 
-  dplyr::bind_cols(predict(models$fit_rush_fds, new_data = ., type = "prob")) %>%
+  dplyr::bind_cols(predict(models_xgboost$fit_rush_fds, new_data = ., type = "prob")) %>%
   dplyr::rename(rushing_fd_exp = .pred_1) %>% 
+  dplyr::mutate(rush_touchdown_exp = dplyr::if_else(two_point_attempt == 1, 0, rushing_td_exp),
+                two_point_conv_exp = dplyr::if_else(two_point_attempt == 1, rushing_td_exp, 0)) %>% 
   dplyr::transmute(season = substr(game_id, 1, 4),
                    week,
                    game_id,
@@ -126,21 +127,19 @@ rush_df <-
                    position,
                    posteam,
                    player_type = "rush",
-                   attempt = 1, 
+                   attempt = 1,
                    yards_gained = rushing_yards,
                    yards_gained_exp = rushing_yards_exp,
-                   # score,
-                   # rushing_score_exp = rushing_td_exp,
-                   touchdown = rush_touchdown,
-                   touchdown_exp = if_else(two_point_attempt == 1, 0, rushing_td_exp),
+                   touchdown = dplyr::if_else(rush_touchdown == "1", 1L, 0L),
+                   touchdown_exp = dplyr::if_else(two_point_attempt == 1, 0, rush_touchdown_exp),
                    two_point_conv = two_point_converted,
-                   two_point_conv_exp = if_else(two_point_attempt == 1, rushing_td_exp, 0),
-                   first_down = as.numeric(first_down) - 1,
+                   two_point_conv_exp = dplyr::if_else(two_point_attempt == 1, rush_touchdown_exp, 0),
+                   first_down = dplyr::if_else(first_down == "1", 1L, 0L),
                    first_down_exp = rushing_fd_exp,
-                   fantasy_points = rushing_fantasy_points,
-                   fantasy_points_exp = 0.1*rushing_yards_exp + if_else(two_point_attempt == 1,
-                                                                        2*rushing_td_exp,
-                                                                        6*rushing_td_exp),
+                   fantasy_points = 6*touchdown + 2*two_point_converted + 0.1*rushing_yards - 2*fumble_lost,
+                   fantasy_points_exp = 0.1*rushing_yards_exp + dplyr::if_else(two_point_attempt == 1,
+                                                                               2*rush_touchdown_exp,
+                                                                               6*rush_touchdown_exp),
                    fumble_lost)
 
 
@@ -326,7 +325,7 @@ pass_df_pivot <-
 
 combined_df <- 
   pass_df_pivot %>%
-  mutate(week = factor(week, levels = as.character(c(1:21)), ordered = TRUE)) %>% 
+  # mutate(week = factor(week, levels = as.character(c(1:21)), ordered = TRUE)) %>% 
   bind_rows(rush_df) %>% 
   # mutate(season = as.character(season)) %>% 
   group_by(season, posteam, week, game_id, player_id, full_name, position, player_type) %>% 
@@ -337,7 +336,7 @@ combined_df <-
               names_from = player_type,
               names_glue = "{player_type}_{.value}",
               # values_fn = ~sum(.x, na.rm = TRUE),
-              values_from = where(is.numeric)
+              values_from =c(where(is.numeric), -week)
               ) %>%
   remove_empty(which = "cols") %>% 
   mutate(across(.cols = where(is.numeric),
@@ -372,7 +371,7 @@ snaps <- load_snap_counts() %>%
          team = coalesce(posteam, team),
          position = coalesce(position.y,position.x),
          season = coalesce(season, substr(game_id,1,4)),
-         week = coalesce(as.numeric(week), as.numeric(substr(game_id,6,7))),
+         week = coalesce(week, as.numeric(substr(game_id,6,7))),
          
          across(where(is.numeric), ~replace_na(.x, 0))) %>%
   select(-c(player, pfr_id, position.x, position.y, posteam))
