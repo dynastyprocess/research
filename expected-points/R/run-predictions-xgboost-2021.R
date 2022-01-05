@@ -151,14 +151,18 @@ pass_df <-
   # dplyr::filter(season >= start_year) %>% 
   # dplyr::collect() %>%
   # Restrict to rush plays
+  
+  # dplyr::filter(stringr::str_detect(desc, "Defensive Pass Interference")) %>% 
+  
   dplyr::filter(play_type == "pass", !str_detect(desc, "Aborted")) %>%
+  
   dplyr::left_join(select(nflfastr_rosters,
                           gsis_id,
                           season,
                           passer_position = position,
                           passer_full_name = full_name,
                           passer_birth_date = birth_date),
-                   by = c("passer_player_id" = "gsis_id", "season"),
+                   by = c("passer_id" = "gsis_id", "season"),
                    na_matches = "never") %>%
   dplyr::left_join(select(nflfastr_rosters,
                           gsis_id,
@@ -166,9 +170,9 @@ pass_df <-
                           receiver_position = position,
                           receiver_full_name = full_name,
                           receiver_birth_date = birth_date),
-                   by = c("receiver_player_id" = "gsis_id", "season"),
+                   by = c("receiver_id" = "gsis_id", "season"),
                    na_matches = "never") %>%
-  dplyr::filter(passer_position %in% c("QB","RB","WR","TE")) %>% 
+  dplyr::filter(passer_position %in% c("QB","RB","WR","TE")) %>%
   dplyr::filter(receiver_position %in% c("QB","RB","WR","TE")) %>%
   mutate(
     # New Calculated Columns
@@ -176,7 +180,7 @@ pass_df <-
                               posteam_type == "away" & spread_line>0 ~ (total_line-spread_line)/2,
                               posteam_type == "home" & spread_line>0 ~ (total_line+spread_line)/2 - spread_line,
                               posteam_type == "home" & spread_line<=0 ~ (total_line-spread_line)/2),
-    
+
     # passer_age = get_age(passer_birth_date, game_date, dec = TRUE),
     # receiver_age = get_age(receiver_birth_date, game_date, dec = TRUE),
     relative_to_sticks = air_yards - ydstogo,
@@ -189,6 +193,21 @@ pass_df <-
     temp = case_when(roof %in% c("closed", "dome") ~ 68L, is.na(temp) ~ 60L, TRUE ~ temp),
     wind = case_when(roof %in% c("closed", "dome") ~ 0L, is.na(wind) ~ 8L, TRUE ~ wind),
     era = if_else(season >= 2018, "post2018", "pre2018"),
+    
+    # Cleaning 2pt attempts
+    down = dplyr::if_else(two_point_attempt == 1, 4, down),
+    rushing_yards = dplyr::if_else(two_point_attempt == 1, 0, rushing_yards),
+    xpass = dplyr::if_else(two_point_attempt == 1, 0.75, xpass),
+    pass_location = dplyr::case_when(!is.na(pass_location) ~ pass_location,
+                                     stringr::str_detect(desc, " left") ~ "left",
+                                     stringr::str_detect(desc, " right") ~ "right",
+                                     stringr::str_detect(desc, " middle") ~ "middle",
+                                     TRUE ~ "unk"),
+    yards_after_catch = dplyr::if_else(two_point_attempt == 1, 0, xpass),
+    air_yards = dplyr::if_else(two_point_attempt == 1, yardline_100, air_yards),
+    two_point_converted = dplyr::case_when(two_point_conv_result == "success" ~ 1,
+                                           is.na(two_point_conv_result) & stringr::str_detect(desc, "ATTEMPT SUCCEEDS") ~ 1,
+                                           TRUE ~ 0),
     
     # Categorical Variables
     # yards_after_catch = replace_na(yards_after_catch, 0),
